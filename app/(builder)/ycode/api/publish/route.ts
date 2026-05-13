@@ -513,16 +513,10 @@ export async function POST(request: NextRequest) {
         globalChanged = true;
       }
 
-      // Full publish touches global caches (locales, translations, redirects, fonts,
-      // folder auth, error pages) that are all tagged with 'all-pages'.
-      // Force full invalidation so those caches are refreshed.
-      if (!globalChanged && isPublishingAll) {
-        const hasGlobalChanges = result.changes.locales > 0
-          || result.changes.translations > 0;
-        if (hasGlobalChanges) {
-          globalChanged = true;
-        }
-      }
+      // NOTE: Locales/translations are published on every full publish but
+      // publishLocalisation() counts all active drafts, not actual changes.
+      // These resources are tagged with 'all-pages' and get refreshed via
+      // selectiveInvalidation's revalidateTag call for any affected pages.
 
       // Find pages indirectly affected by changed components, styles, collections
       // Single scan of draft page_layers instead of one scan per resource type
