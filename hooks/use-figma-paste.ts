@@ -1,12 +1,14 @@
 'use client';
 
 /**
- * Figma Paste Hook
+ * Unified Paste Hook
  *
- * Intercepts paste events to detect Figma plugin clipboard data.
- * When detected, converts the Figma payload into Ycode layers and
- * inserts them into the current page. Falls through to the normal
- * paste handler when no Figma data is present.
+ * Intercepts the browser paste event to:
+ * 1. Check for Figma plugin clipboard data → convert and insert layers
+ * 2. Fall back to normal Ycode internal clipboard paste
+ *
+ * This runs on the paste event (not keydown) so we have access to
+ * clipboardData for detecting the Figma payload.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -17,27 +19,23 @@ import type { Layer } from '@/types';
 
 interface UseFigmaPasteOptions {
   enabled: boolean;
-  currentPageId: string | null;
-  selectedLayerId: string | null;
-  editingComponentId: string | null;
-  insertLayers: (layers: Layer[]) => void;
+  insertFigmaLayers: (layers: Layer[]) => void;
+  onNormalPaste: () => void;
 }
 
 function extractFigmaPayload(clipboardData: DataTransfer): YcodeFigmaPayload | null {
   const html = clipboardData.getData('text/html');
-  if (!html) return null;
-
-  // The Figma plugin wraps the JSON in a hidden div with a data attribute
-  const match = html.match(/data-ycode-figma="([^"]*)"/);
-  if (match?.[1]) {
-    try {
-      const decoded = decodeURIComponent(match[1]);
-      const parsed = JSON.parse(decoded);
-      if (isYcodeFigmaPayload(parsed)) return parsed;
-    } catch { /* not valid */ }
+  if (html) {
+    const match = html.match(/data-ycode-figma="([^"]*)"/);
+    if (match?.[1]) {
+      try {
+        const decoded = decodeURIComponent(match[1]);
+        const parsed = JSON.parse(decoded);
+        if (isYcodeFigmaPayload(parsed)) return parsed;
+      } catch { /* not valid */ }
+    }
   }
 
-  // Fallback: check text/plain for raw JSON payload
   const text = clipboardData.getData('text/plain');
   if (text?.includes(YCODE_FIGMA_SIGNATURE)) {
     try {
@@ -51,23 +49,38 @@ function extractFigmaPayload(clipboardData: DataTransfer): YcodeFigmaPayload | n
 
 export function useFigmaPaste({
   enabled,
-  currentPageId,
-  selectedLayerId,
-  editingComponentId,
-  insertLayers,
+  insertFigmaLayers,
+  onNormalPaste,
 }: UseFigmaPasteOptions) {
   const isProcessingRef = useRef(false);
 
   const handlePaste = useCallback(async (e: ClipboardEvent) => {
     if (!enabled || isProcessingRef.current) return;
-    if (!currentPageId && !editingComponentId) return;
-    if (!e.clipboardData) return;
 
-    const payload = extractFigmaPayload(e.clipboardData);
-    if (!payload) return;
+    const target = e.target as HTMLElement;
+    if (
+      target &&
+      (target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable)
+    ) {
+      return;
+    }
 
     e.preventDefault();
-    e.stopPropagation();
+
+    if (!e.clipboardData) {
+      onNormalPaste();
+      return;
+    }
+
+    const payload = extractFigmaPayload(e.clipboardData);
+
+    if (!payload) {
+      onNormalPaste();
+      return;
+    }
+
     isProcessingRef.current = true;
 
     const nodeCount = payload.nodes.length;
@@ -84,7 +97,7 @@ export function useFigmaPaste({
         return;
       }
 
-      insertLayers(layers);
+      insertFigmaLayers(layers);
 
       toast.success(
         `Imported ${layers.length} layer${layers.length !== 1 ? 's' : ''} from Figma`,
@@ -99,12 +112,11 @@ export function useFigmaPaste({
     } finally {
       isProcessingRef.current = false;
     }
-  }, [enabled, currentPageId, editingComponentId, insertLayers]);
+  }, [enabled, insertFigmaLayers, onNormalPaste]);
 
   useEffect(() => {
     if (!enabled) return;
 
-    // Use capture phase to intercept before the normal paste handler
     document.addEventListener('paste', handlePaste, true);
     return () => document.removeEventListener('paste', handlePaste, true);
   }, [enabled, handlePaste]);

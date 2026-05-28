@@ -284,14 +284,46 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     }
   }, [getCurrentLayers, updateCurrentLayers, setSelectedLayerId]);
 
-  const figmaSelectedLayerId = useEditorStore((state) => state.selectedLayerId);
+  // Normal Ycode paste (internal clipboard) — extracted from keydown so it
+  // can run inside the paste event handler after Figma detection fails.
+  const handleNormalPaste = useCallback(() => {
+    if (!canEditStructure) return;
+    const selectedLayerId = selectedLayerIdRef.current;
+    if (!clipboardLayer || !selectedLayerId) return;
+
+    if (editingComponentId) {
+      const circularError = checkCircularReference(editingComponentId, clipboardLayer, components);
+      if (circularError) {
+        toast.error('Infinite component loop detected', { description: circularError });
+        return;
+      }
+      const layers = getCurrentLayers();
+      const result = findParentAndIndex(layers, selectedLayerId);
+      if (result) {
+        if (result.parent && !canPasteIntoParent(layers, result.parent.id, clipboardLayer)) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
+        updateCurrentLayers(insertLayerAfter(layers, result.parent, result.index, newLayer));
+      }
+    } else if (currentPageId) {
+      let pastedLayer: Layer | null;
+      if (selectedLayerId === 'body') {
+        pastedLayer = pasteInside(currentPageId, selectedLayerId, clipboardLayer);
+      } else {
+        pastedLayer = pasteAfter(currentPageId, selectedLayerId, clipboardLayer);
+      }
+      if (!pastedLayer && clipboardLayer) {
+        toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+      }
+    }
+  }, [canEditStructure, clipboardLayer, editingComponentId, components, getCurrentLayers, updateCurrentLayers, currentPageId, pasteInside, pasteAfter]);
 
   useFigmaPaste({
     enabled: !!(currentPageId || editingComponentId),
-    currentPageId,
-    selectedLayerId: figmaSelectedLayerId,
-    editingComponentId,
-    insertLayers: insertFigmaLayers,
+    insertFigmaLayers,
+    onNormalPaste: handleNormalPaste,
   });
 
   // Check if Supabase is configured, redirect to setup if not
@@ -1600,44 +1632,9 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
         }
 
         // Paste: Cmd/Ctrl + V
-        if ((e.metaKey || e.ctrlKey) && e.key === 'v' && !isContentOnlyRole) {
-          if (!isInputFocused && (currentPageId || editingComponentId)) {
-            e.preventDefault();
-            // Use clipboard store for paste (works with context menu)
-            if (clipboardLayer && selectedLayerId) {
-              // In component edit mode, paste into component drafts
-              if (editingComponentId) {
-                const circularError = checkCircularReference(editingComponentId, clipboardLayer, components);
-                if (circularError) {
-                  toast.error('Infinite component loop detected', { description: circularError });
-                  return;
-                }
-
-                const layers = getCurrentLayers();
-                const result = findParentAndIndex(layers, selectedLayerId);
-                if (result) {
-                  if (result.parent && !canPasteIntoParent(layers, result.parent.id, clipboardLayer)) {
-                    toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
-                    return;
-                  }
-                  const newLayer = regenerateIdsWithInteractionRemapping(cloneDeep(clipboardLayer));
-                  updateCurrentLayers(insertLayerAfter(layers, result.parent, result.index, newLayer));
-                }
-              } else if (currentPageId) {
-                // If body is selected, paste inside body (not after it)
-                let pastedLayer: Layer | null;
-                if (selectedLayerId === 'body') {
-                  pastedLayer = pasteInside(currentPageId, selectedLayerId, clipboardLayer);
-                } else {
-                  pastedLayer = pasteAfter(currentPageId, selectedLayerId, clipboardLayer);
-                }
-                if (!pastedLayer && clipboardLayer) {
-                  toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
-                }
-              }
-            }
-          }
-        }
+        // Don't preventDefault here — let the browser fire the paste event
+        // so the paste handler (use-figma-paste) can read clipboardData for
+        // Figma payloads. Both Figma and normal paste are handled there.
 
         // Duplicate: Cmd/Ctrl + D (supports multi-select)
         if ((e.metaKey || e.ctrlKey) && e.key === 'd' && !isContentOnlyRole) {
