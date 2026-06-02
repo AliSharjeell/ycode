@@ -80,7 +80,7 @@ import { useRole } from '@/hooks/use-role';
 
 // 6. Utils/lib
 import { findHomepage } from '@/lib/page-utils';
-import { findLayerById, getClassesString, removeLayerById, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, findParentAndIndex, insertLayerAfter, updateLayerProps, getLayerIndexes, removeRichTextSublayer, canPasteIntoParent, LINK_NESTING_ERROR } from '@/lib/layer-utils';
+import { findLayerById, getClassesString, removeLayerById, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, findParentAndIndex, insertLayerAfter, updateLayerProps, getLayerIndexes, removeRichTextSublayer, canPasteIntoParent, canHaveChildren, LINK_NESTING_ERROR } from '@/lib/layer-utils';
 import { cloneDeep } from 'lodash';
 
 // 5. Types
@@ -265,24 +265,90 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
     }
   }, [editingComponentId, editingComponentVariantId, currentPageId, setDraftLayers]);
 
-  // Figma paste: detect Figma plugin clipboard data and convert to layers
+  // Figma paste: detect Figma plugin clipboard data and convert to layers.
+  // Placement mirrors Ycode's own copy/paste: insert inside the selected layer
+  // when it can hold children, otherwise drop in as a sibling next to it; with
+  // nothing suitable selected, fall back to the page root (body).
   const insertFigmaLayers = useCallback((layers: Layer[]) => {
-    const currentLayers = getCurrentLayers();
-    const body = currentLayers.find(l => l.id === 'body' || l.name === 'body');
+    if (layers.length === 0 || !canEditStructure) return;
 
-    if (body) {
-      const updatedLayers = currentLayers.map(layer => {
-        if (layer.id === body.id) {
-          return { ...layer, children: [...(layer.children || []), ...layers] };
+    const selectedId = selectedLayerIdRef.current;
+
+    // Component editor: the store paste actions are page-scoped, so operate
+    // directly on the component's layer tree using the same rules.
+    if (editingComponentId) {
+      const currentLayers = getCurrentLayers();
+      const selected = selectedId ? findLayerById(currentLayers, selectedId) : null;
+
+      let updated: Layer[];
+      if (selected && canHaveChildren(selected)) {
+        const appendInto = (nodes: Layer[]): Layer[] =>
+          nodes.map(node =>
+            node.id === selected.id
+              ? { ...node, children: [...(node.children || []), ...layers] }
+              : node.children && node.children.length > 0
+                ? { ...node, children: appendInto(node.children) }
+                : node,
+          );
+        updated = appendInto(currentLayers);
+      } else if (selected) {
+        const result = findParentAndIndex(currentLayers, selected.id);
+        if (
+          result?.parent &&
+          layers.some(l => !canPasteIntoParent(currentLayers, result.parent!.id, l))
+        ) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
         }
-        return layer;
-      });
-      updateCurrentLayers(updatedLayers);
-      if (layers.length > 0) {
-        setSelectedLayerId(layers[0].id);
+        const parent = result?.parent ?? null;
+        let index = result ? result.index : currentLayers.length - 1;
+        updated = currentLayers;
+        for (const layer of layers) {
+          updated = insertLayerAfter(updated, parent, index, layer);
+          index += 1;
+        }
+      } else {
+        updated = [...currentLayers, ...layers];
+      }
+
+      updateCurrentLayers(updated);
+      setSelectedLayerId(layers[0].id);
+      return;
+    }
+
+    if (!currentPageId) return;
+
+    const currentLayers = getCurrentLayers();
+    const selected = selectedId ? findLayerById(currentLayers, selectedId) : null;
+
+    if (!selected || canHaveChildren(selected)) {
+      // Inside the selected container — or the page root when nothing usable
+      // is selected. pasteInside appends in order, preserving layer sequence.
+      const targetId = selected
+        ? selected.id
+        : currentLayers.find(l => l.id === 'body' || l.name === 'body')?.id ?? 'body';
+      for (const layer of layers) {
+        if (!pasteInside(currentPageId, targetId, layer)) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+      }
+    } else {
+      // Selected layer can't hold children — drop in next to it. Chain the
+      // anchor through each pasted layer so the original order is kept.
+      let anchorId = selected.id;
+      for (const layer of layers) {
+        const pasted = pasteAfter(currentPageId, anchorId, layer);
+        if (!pasted) {
+          toast.error(LINK_NESTING_ERROR.title, { description: LINK_NESTING_ERROR.description });
+          return;
+        }
+        anchorId = pasted.id;
       }
     }
-  }, [getCurrentLayers, updateCurrentLayers, setSelectedLayerId]);
+
+    setSelectedLayerId(layers[0].id);
+  }, [canEditStructure, editingComponentId, currentPageId, getCurrentLayers, updateCurrentLayers, setSelectedLayerId, pasteInside, pasteAfter]);
 
   // Normal Ycode paste (internal clipboard) — extracted from keydown so it
   // can run inside the paste event handler after Figma detection fails.

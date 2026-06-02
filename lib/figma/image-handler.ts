@@ -1,5 +1,8 @@
 'use client';
 
+import { useAssetsStore } from '@/stores/useAssetsStore';
+import type { Asset } from '@/types';
+
 function base64ToFile(dataUri: string, filename: string): File {
   const [meta, base64] = dataUri.split(',');
   const mimeMatch = meta.match(/:(.*?);/);
@@ -16,7 +19,7 @@ function svgToFile(svgString: string, filename: string): File {
   return new File([svgString], filename, { type: 'image/svg+xml' });
 }
 
-async function uploadFile(file: File): Promise<string | null> {
+async function uploadFile(file: File): Promise<Asset | null> {
   try {
     const formData = new FormData();
     formData.append('file', file);
@@ -30,7 +33,11 @@ async function uploadFile(file: File): Promise<string | null> {
     if (!response.ok) return null;
 
     const data = await response.json();
-    return data?.data?.id ?? null;
+    const asset: Asset | undefined = data?.data;
+    if (!asset?.id) return null;
+
+    useAssetsStore.getState().addAsset(asset);
+    return asset;
   } catch {
     return null;
   }
@@ -41,7 +48,8 @@ export async function uploadFigmaImage(
   filename: string,
 ): Promise<string | null> {
   const file = base64ToFile(base64DataUri, filename);
-  return uploadFile(file);
+  const asset = await uploadFile(file);
+  return asset?.id ?? null;
 }
 
 export async function uploadFigmaSvg(
@@ -49,5 +57,6 @@ export async function uploadFigmaSvg(
   filename: string,
 ): Promise<string | null> {
   const file = svgToFile(svgString, filename);
-  return uploadFile(file);
+  const asset = await uploadFile(file);
+  return asset?.id ?? null;
 }
