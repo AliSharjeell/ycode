@@ -1310,7 +1310,27 @@ const LayerItemImpl: React.FC<{
   const fetchLayerData = useCollectionLayerStore((state) => state.fetchLayerData);
   const fieldsByCollectionId = useCollectionsStore((state) => state.fields);
   const itemsByCollectionId = useCollectionsStore((state) => state.items);
+  const referencedItemsByCollectionId = useCollectionLayerStore((state) => state.referencedItems);
   const allCollectionItems = React.useMemo(() => layerData || [], [layerData]);
+
+  // Reference resolution needs the referenced rows in scope. The global CMS
+  // store only preloads a slice of each collection, so merge in the larger
+  // referenced-items batch (loaded by CenterCanvas) to cover references that
+  // point to rows beyond that slice.
+  const itemsForReferenceResolution = React.useMemo(() => {
+    const refMap = referencedItemsByCollectionId;
+    if (!refMap || Object.keys(refMap).length === 0) return itemsByCollectionId;
+    const merged: Record<string, CollectionItemWithValues[]> = { ...itemsByCollectionId };
+    for (const [collectionId, refItems] of Object.entries(refMap)) {
+      if (!refItems || refItems.length === 0) continue;
+      const byId = new Map((merged[collectionId] || []).map((item) => [item.id, item]));
+      for (const item of refItems) {
+        if (!byId.has(item.id)) byId.set(item.id, item);
+      }
+      merged[collectionId] = Array.from(byId.values());
+    }
+    return merged;
+  }, [itemsByCollectionId, referencedItemsByCollectionId]);
 
   // Get the source for multi-asset field resolution
   const sourceFieldSource = collectionVariable?.source_field_source;
@@ -3129,7 +3149,7 @@ const LayerItemImpl: React.FC<{
               ? resolveReferenceFieldsSync(
                 translatedItemValues,
                 collectionFields,
-                itemsByCollectionId,
+                itemsForReferenceResolution,
                 fieldsByCollectionId
               )
               : translatedItemValues;
