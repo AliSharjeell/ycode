@@ -17,6 +17,16 @@ import { useFontsStore } from '@/stores/useFontsStore';
 import { buildDesign } from '@/lib/import/design';
 import type { ImportStyleRef } from '@/lib/import/types';
 
+/**
+ * Stable identity for "same style": name plus its declarations, order-agnostic
+ * (the class set, not its written order, defines equality). Lets re-pasted
+ * combos reuse a previously created style instead of duplicating it.
+ */
+function contentKey(name: string, classes: string): string {
+  const sorted = classes.split(/\s+/).filter(Boolean).sort().join(' ');
+  return `${name}\u0000${sorted}`;
+}
+
 /** Mutable counters surfaced in the post-import summary toast. */
 export interface MaterializerCounts {
   styles: number;
@@ -39,13 +49,25 @@ export class ImportMaterializer {
   /** Names already taken (existing styles + ones created this run). */
   private readonly usedStyleNames: Set<string>;
 
+  /** Existing styles keyed by `name\u0000<sorted classes>` for cross-paste reuse. */
+  private readonly stylesByContent = new Map<string, LayerStyle>();
+
   constructor(group: string) {
     this.group = group;
     const existing = useLayerStylesStore.getState().styles ?? [];
     this.usedStyleNames = new Set(existing.map((s) => s.name));
+    for (const style of existing) {
+      this.stylesByContent.set(contentKey(style.name, style.classes), style);
+    }
   }
 
-  /** Create (or reuse) a `LayerStyle` for a reusable class reference. */
+  /**
+   * Create (or reuse) a `LayerStyle` for a reusable class reference.
+   *
+   * Reuse is two-tiered: by the ref's stable key within one paste, and by
+   * name + content across pastes/existing styles — so re-pasting a `Button`
+   * combo links to the same style instead of spawning `Button 2`, `Button 3`.
+   */
   getOrCreateStyle(ref: ImportStyleRef): Promise<LayerStyle | null> {
     const cached = this.styleCache.get(ref.key);
     if (cached) return cached;
@@ -54,12 +76,24 @@ export class ImportMaterializer {
       const classes = ref.classes.join(' ').trim();
       if (!classes) return null;
 
-      const name = this.uniqueStyleName(ref.name || 'Imported');
+      const name = ref.name || 'Imported';
+
+      // Reuse an existing style with the same name and identical declarations.
+      const key = contentKey(name, classes);
+      const existing = this.stylesByContent.get(key);
+      if (existing) return existing;
+
       const design = buildDesign(classes);
       // Leave imported styles ungrouped so they always surface in the layer
       // style picker (grouped styles only show when that group is selected).
-      const style = await useLayerStylesStore.getState().createStyle(name, classes, design);
-      if (style) this.counts.styles += 1;
+      const style = await useLayerStylesStore.getState().createStyle(this.uniqueStyleName(name), classes, design);
+      if (style) {
+        this.counts.styles += 1;
+        // Register under both the requested name and the (possibly suffixed)
+        // created name so later refs in this run can still reuse it.
+        this.stylesByContent.set(key, style);
+        this.stylesByContent.set(contentKey(style.name, style.classes), style);
+      }
       return style;
     })();
 

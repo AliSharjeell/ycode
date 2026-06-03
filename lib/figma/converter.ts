@@ -23,6 +23,7 @@ import type {
 } from '@/lib/figma/types';
 import { generateId } from '@/lib/utils';
 import { designToClassString } from '@/lib/tailwind-class-mapper';
+import { getStyleIds } from '@/lib/layer-style-resolve';
 import { uploadFigmaImage } from '@/lib/figma/image-handler';
 import { FigmaMaterializer } from '@/lib/figma/materializer';
 import { planResponsive } from '@/lib/figma/responsive';
@@ -658,6 +659,7 @@ async function applyTextStyle(
   if (!created) return false;
 
   layer.styleId = created.id;
+  layer.styleIds = [created.id];
   // Figma text styles carry typography (font/size/weight/line-height) but never
   // a fill colour — colour lives on the layer's fill. Preserve the node's own
   // colour as a local override so applying the style doesn't strip it. Clone so
@@ -1279,7 +1281,7 @@ function classesText(classes: string | string[] | undefined): string {
 
 function styleSignature(layer: Layer): string | null {
   if (layer.componentId) return null; // instances have no own styling
-  if (layer.styleId) return null; // already styled
+  if (getStyleIds(layer).length > 0) return null; // already styled
   const classes = classesText(layer.classes).trim();
   if (!classes) return null;
   // Exclude layout-positioning-only one-offs from dedup noise.
@@ -1432,7 +1434,10 @@ async function applyDedupStylesEligible(
         styleId = created?.id || '';
         eligible.set(sig, styleId);
       }
-      if (styleId) layer.styleId = styleId;
+      if (styleId) {
+        layer.styleId = styleId;
+        layer.styleIds = [styleId];
+      }
     }
     if (layer.children?.length) {
       for (const child of layer.children) await create(child);

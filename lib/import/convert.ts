@@ -9,46 +9,9 @@
 import type { Layer, LinkSettings } from '@/types';
 import { generateId } from '@/lib/utils';
 import { buildDesign } from '@/lib/import/design';
-import { getAffectedProperties, removeConflictingClasses } from '@/lib/tailwind-class-mapper';
+import { mergeClassStack } from '@/lib/layer-style-resolve';
 import type { ImportMaterializer } from '@/lib/import/materializer';
 import type { ImportNode, ImportStyleRef } from '@/lib/import/types';
-
-/** Breakpoint + state prefix on a Tailwind class (empty for base desktop/neutral). */
-const CLASS_PREFIX_RE = /^((?:max-lg:|max-md:|lg:|md:)?(?:hover:|focus:|active:|disabled:|visited:|current:)?)/;
-
-function classPrefix(cls: string): string {
-  return cls.match(CLASS_PREFIX_RE)?.[1] ?? '';
-}
-
-/**
- * Collapse an ordered class stack (base first, combos/overrides last) into a
- * conflict-free list where later classes win per property — scoped to the same
- * breakpoint/state group.
- *
- * Webflow resolves a base class + combo classes by source order (the combo
- * wins). But stacking two utilities for the same property (e.g. base
- * `bg-[#f3f4f6]` and combo `bg-[#19292a]`) doesn't cascade by attribute order
- * in the compiled stylesheet, so the wrong one can win. We therefore drop the
- * earlier conflicting class, keeping the later one. Reuses Ycode's own
- * property-aware conflict detection, which (unlike tailwind-merge) correctly
- * separates background-color vs background-image, font-size vs text-color, etc.
- */
-function mergeClassStack(orderedClasses: string[]): string[] {
-  const merged: string[] = [];
-  for (const cls of orderedClasses) {
-    const props = getAffectedProperties(cls);
-    if (props.length > 0) {
-      const prefix = classPrefix(cls);
-      for (let i = merged.length - 1; i >= 0; i -= 1) {
-        if (classPrefix(merged[i]) !== prefix) continue;
-        const conflicts = props.some((prop) => removeConflictingClasses([merged[i]], prop).length === 0);
-        if (conflicts) merged.splice(i, 1);
-      }
-    }
-    if (!merged.includes(cls)) merged.push(cls);
-  }
-  return merged;
-}
 
 /** Semantic tags that should be preserved via `settings.tag` on a div layer. */
 const SEMANTIC_TAGS = new Set([
@@ -59,7 +22,8 @@ const SEMANTIC_TAGS = new Set([
 interface ResolvedStyling {
   classes: string;
   design: Layer['design'];
-  styleId?: string;
+  /** Ordered applied styles, low -> high priority (base class first, combos after). */
+  styleIds?: string[];
   styleOverrides?: Layer['styleOverrides'];
 }
 
@@ -113,64 +77,100 @@ export class ImportConverter {
   /**
    * Resolve a node's reusable styles + extra classes into a styled layer base.
    *
-   * Webflow stacks multiple reusable classes on one element (base + combos), but
-   * Ycode allows a single `styleId` per layer. So we collapse the whole class
-   * stack into one reusable `LayerStyle`, deduped by the ordered stack identity.
-   * Identical stacks across elements share the same style (real reuse), and no
-   * `styleOverrides` are written unless a genuine one-off class is present —
-   * which keeps layers from being flagged "Customized".
+   * Webflow stacks multiple reusable classes on one element (a base class plus
+   * combo classes), sitting on top of global tag/HTML-element styles. We mirror
+   * that as an ordered `styleIds` stack, lowest priority first: the global
+   * underlay styles (tag rules like `h2`/`a`, plus the document `body` style),
+   * then the base class, then combo classes — one reusable `LayerStyle` each.
+   * The lowest reusable style also absorbs the anonymous framework shims (widget
+   * layout / button `inline-block` not in the clipboard). The flat
+   * `layer.classes` is derived from the stack, so the render is identical
+   * regardless of how it's split. One-off classes (`node.classes`) become
+   * `styleOverrides` (highest priority).
    */
   private async resolveStyling(node: ImportNode): Promise<ResolvedStyling> {
+    const underlay = node.underlayStyles ?? [];
     const refs = node.styles ?? [];
     const extra = node.classes ?? [];
-    // Widget layout defaults sit *under* the element's own styles, so they merge
-    // in first and lose any per-property conflict to the user's classes.
+    // Anonymous layout shims (widget defaults, button `inline-block`) sit at the
+    // very bottom of the cascade, folded into the lowest reusable style so they
+    // fill gaps without becoming a standalone style.
     const framework = node.frameworkClasses ?? [];
 
-    if (refs.length > 0) {
-      // Base class first, then combos, preserving order so combo/later classes
-      // win (matches Webflow precedence and Tailwind's last-wins resolution).
-      const base = refs.find((r) => !r.combo) ?? refs[0];
-      const combos = refs.filter((r) => r !== base);
-      const ordered = [base, ...combos];
+    // Ordered named styles, lowest priority first: global underlay (tag/body)
+    // styles, then the base class, then combo classes. Combo/later classes win,
+    // matching Webflow precedence and Tailwind's last-wins resolution.
+    const base = refs.length > 0 ? (refs.find((r) => !r.combo) ?? refs[0]) : undefined;
+    const combos = base ? refs.filter((r) => r !== base) : [];
+    const orderedNamed: { ref: ImportStyleRef; foldsFramework: boolean }[] = [];
+    for (const u of underlay) orderedNamed.push({ ref: u, foldsFramework: false });
+    if (base) {
+      orderedNamed.push({ ref: base, foldsFramework: true });
+      for (const c of combos) orderedNamed.push({ ref: c, foldsFramework: false });
+    }
+    // With no base class to absorb them, fold the shims into the lowest named
+    // (underlay) style so they persist when the stack is later re-resolved.
+    if (!base && framework.length > 0 && orderedNamed.length > 0) {
+      orderedNamed[0].foldsFramework = true;
+    }
 
-      const stackRef: ImportStyleRef = {
-        // Fold framework defaults into the key so two nodes that share user
-        // classes but differ in widget layout don't collapse to one style.
-        key: [...(framework.length ? [`fw:${framework.join('+')}`] : []), ...ordered.map((r) => r.key)].join('|'),
-        name: ordered.map((r) => r.name).join(' · '),
-        // Framework first (lowest priority), then base + combos so later
-        // declarations win per property.
-        classes: mergeClassStack([...framework, ...ordered.flatMap((r) => r.classes)]),
+    const styleIds: string[] = [];
+    const stackClasses: string[] = [];
+
+    for (const { ref, foldsFramework } of orderedNamed) {
+      const classes = foldsFramework && framework.length > 0
+        ? mergeClassStack([...framework, ...ref.classes])
+        : mergeClassStack(ref.classes);
+
+      const styleRef: ImportStyleRef = {
+        // Fold framework into the style's identity so a base reused with
+        // different widget defaults doesn't collapse onto the wrong style.
+        key: foldsFramework && framework.length > 0 ? `fw:${framework.join('+')}|${ref.key}` : ref.key,
+        name: ref.name,
+        classes,
       };
 
-      const style = await this.mat.getOrCreateStyle(stackRef);
+      const style = await this.mat.getOrCreateStyle(styleRef);
       if (style) {
-        if (extra.length > 0) {
-          // One-off classes override the shared style, so they merge in last.
-          const full = mergeClassStack([...style.classes.split(/\s+/).filter(Boolean), ...extra]).join(' ');
-          const design = buildDesign(full);
-          return {
-            classes: full,
-            design,
-            styleId: style.id,
-            styleOverrides: { classes: full, design },
-          };
-        }
-        return { classes: style.classes, design: style.design, styleId: style.id };
+        styleIds.push(style.id);
+        stackClasses.push(...style.classes.split(/\s+/).filter(Boolean));
+      } else {
+        // Empty/failed (e.g. a declaration-less combo): inline its classes so
+        // nothing is lost, but don't create a style reference for it.
+        stackClasses.push(...classes);
       }
     }
 
+    if (styleIds.length > 0) {
+      const merged = mergeClassStack(stackClasses);
+      if (extra.length > 0) {
+        // One-off classes override the stack, so they merge in last.
+        const full = mergeClassStack([...merged, ...extra]).join(' ');
+        const design = buildDesign(full);
+        return { classes: full, design, styleIds, styleOverrides: { classes: full, design } };
+      }
+      const classesStr = merged.join(' ').trim();
+      return { classes: classesStr, design: buildDesign(classesStr), styleIds };
+    }
+
     // No reusable style (none present, or creation failed): inline everything,
-    // framework defaults first so the user's classes still win conflicts.
-    const all = mergeClassStack([...framework, ...refs.flatMap((r) => r.classes), ...extra]).join(' ').trim();
+    // framework + global underlay first so the user's classes still win.
+    const all = mergeClassStack([
+      ...framework,
+      ...underlay.flatMap((u) => u.classes),
+      ...refs.flatMap((r) => r.classes),
+      ...extra,
+    ]).join(' ').trim();
     return { classes: all, design: buildDesign(all) };
   }
 
   private applyStyling(layer: Layer, styling: ResolvedStyling): void {
     layer.classes = styling.classes;
     if (styling.design) layer.design = styling.design;
-    if (styling.styleId) layer.styleId = styling.styleId;
+    if (styling.styleIds && styling.styleIds.length > 0) {
+      layer.styleIds = styling.styleIds;
+      layer.styleId = styling.styleIds[0]; // legacy mirror during migration
+    }
     if (styling.styleOverrides) layer.styleOverrides = styling.styleOverrides;
   }
 

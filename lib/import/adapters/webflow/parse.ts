@@ -17,6 +17,26 @@ import type { WebflowParseContext, XscpNode, XscpPayload } from '@/lib/import/ad
 const HEADING_TAGS = /^h[1-6]$/;
 
 /**
+ * Friendly layer-style names for the site stylesheet's global tag rules. These
+ * become reusable styles at the bottom of an element's stack (e.g. every `h2`
+ * carries the shared "Heading 2" style under its own classes), mirroring
+ * Webflow's global tag/HTML-element styles.
+ */
+const TAG_STYLE_NAMES: Record<string, string> = {
+  h1: 'Heading 1',
+  h2: 'Heading 2',
+  h3: 'Heading 3',
+  h4: 'Heading 4',
+  h5: 'Heading 5',
+  h6: 'Heading 6',
+  a: 'Link',
+  p: 'Paragraph',
+  li: 'List item',
+  blockquote: 'Blockquote',
+  body: 'Body',
+};
+
+/**
  * Layout defaults for Webflow widget node types whose layout normally comes
  * from Webflow's built-in framework CSS (`.w-slider`, `.w-tabs`, `.w-nav`, …)
  * rather than the user's own classes. That framework CSS isn't in the clipboard,
@@ -179,18 +199,20 @@ export function parseWebflow(data: XscpPayload, globalStyles?: GlobalStylesheet)
   const resolveStyles = (classIds: string[] | undefined): ImportStyleRef[] =>
     (classIds ?? []).map(resolveStyle).filter((r): r is ImportStyleRef => r !== null);
 
-  // Tag-rule classes from the global stylesheet (e.g. `h2` heading color),
-  // memoised per tag. Empty when no stylesheet is supplied.
-  const tagFrameworkCache = new Map<string, string[]>();
-  const tagFramework = (tag?: string): string[] => {
-    if (!tag || !globalStyles) return [];
+  // Global tag rules (e.g. `h2` heading color) as named, reusable style refs,
+  // memoised per tag. Null when no stylesheet is supplied or the tag has no rule.
+  const tagUnderlayCache = new Map<string, ImportStyleRef | null>();
+  const tagUnderlay = (tag?: string): ImportStyleRef | null => {
+    if (!tag || !globalStyles) return null;
     const key = tag.toLowerCase();
-    const cached = tagFrameworkCache.get(key);
-    if (cached) return cached;
+    if (tagUnderlayCache.has(key)) return tagUnderlayCache.get(key) ?? null;
     const decl = globalStyles.tagRules.get(key);
     const classes = decl ? cssToClasses(decl) : [];
-    tagFrameworkCache.set(key, classes);
-    return classes;
+    const ref: ImportStyleRef | null = classes.length > 0
+      ? { key: `wf-tag:${key}`, name: TAG_STYLE_NAMES[key] ?? key.toUpperCase(), classes }
+      : null;
+    tagUnderlayCache.set(key, ref);
+    return ref;
   };
 
   const ctx: WebflowParseContext = {
@@ -199,7 +221,7 @@ export function parseWebflow(data: XscpPayload, globalStyles?: GlobalStylesheet)
     resolveStyleByName: resolvers.byName,
     resolveStyles,
     resolveAssetUrl: resolvers.resolveAssetUrl,
-    tagFramework,
+    tagUnderlay,
     buildNode: (node) => buildNode(node, ctx),
   };
 
@@ -214,13 +236,15 @@ export function parseWebflow(data: XscpPayload, globalStyles?: GlobalStylesheet)
     .filter((n): n is ImportNode => n !== null);
 
   // The site's base text style (`.body`: font-family, color, size) lives on the
-  // <body>, which isn't in the clipboard. Apply it to the roots as lowest-
-  // priority framework so the whole paste inherits the right typeface/colour.
+  // <body>, which isn't in the clipboard. Apply it to the roots as a shared
+  // "Body" style at the very bottom of their stack so the whole paste inherits
+  // the right typeface/colour (font-family/color cascade to descendants).
   if (globalStyles?.bodyDecl) {
     const bodyClasses = cssToClasses(globalStyles.bodyDecl);
     if (bodyClasses.length > 0) {
+      const bodyRef: ImportStyleRef = { key: 'wf-body', name: 'Body', classes: bodyClasses };
       for (const root of roots) {
-        root.frameworkClasses = [...bodyClasses, ...(root.frameworkClasses ?? [])];
+        root.underlayStyles = [bodyRef, ...(root.underlayStyles ?? [])];
       }
     }
   }
@@ -283,17 +307,18 @@ function buildNode(node: XscpNode | undefined, ctx: WebflowParseContext): Import
     const href = node.data?.link?.href || node.data?.attr?.href;
     const link = href ? { href } : undefined;
     const base: ImportNode = { kind: 'link', tag: 'a', styles, link, displayName };
+    // The site's global `a` rule (color/decoration) becomes a shared "Link"
+    // style beneath the element's own classes.
+    const linkUnderlay = ctx.tagUnderlay('a');
+    if (linkUnderlay) base.underlayStyles = [linkUnderlay];
     // Webflow buttons (`data.button`) rely on the framework's
     // `.w-button { display: inline-block }`, which isn't in the clipboard.
     // Flag them so they become Ycode `button` layers and seed the missing
     // display so they shrink-wrap instead of stretching inside a flex parent.
     const isButton = node.data?.button === true;
-    const tagFw = ctx.tagFramework('a');
     if (isButton) {
       base.button = true;
-      base.frameworkClasses = ['inline-block', ...tagFw];
-    } else if (tagFw.length > 0) {
-      base.frameworkClasses = tagFw;
+      base.frameworkClasses = ['inline-block'];
     }
     if (isTextual(childNodes)) {
       base.text = collectText(childNodes, ctx);
@@ -305,15 +330,15 @@ function buildNode(node: XscpNode | undefined, ctx: WebflowParseContext): Import
 
   if (type === 'Heading') {
     const heading: ImportNode = { kind: 'heading', tag: node.tag, styles, text: collectText(childNodes, ctx), displayName };
-    const tagFw = ctx.tagFramework(node.tag);
-    if (tagFw.length > 0) heading.frameworkClasses = tagFw;
+    const underlay = ctx.tagUnderlay(node.tag);
+    if (underlay) heading.underlayStyles = [underlay];
     return heading;
   }
 
   if (isTextual(childNodes)) {
     const textNode: ImportNode = { kind: 'text', tag: node.tag, styles, text: collectText(childNodes, ctx), displayName };
-    const tagFw = ctx.tagFramework(node.tag);
-    if (tagFw.length > 0) textNode.frameworkClasses = tagFw;
+    const underlay = ctx.tagUnderlay(node.tag);
+    if (underlay) textNode.underlayStyles = [underlay];
     return textNode;
   }
 
@@ -329,9 +354,9 @@ function buildNode(node: XscpNode | undefined, ctx: WebflowParseContext): Import
   }
 
   const box: ImportNode = { kind: 'box', tag: node.tag, styles, displayName, children };
+  const underlay = ctx.tagUnderlay(node.tag);
+  if (underlay) box.underlayStyles = [underlay];
   const widgetClasses = type ? WEBFLOW_WIDGET_CLASSES[type] : undefined;
-  const tagFw = ctx.tagFramework(node.tag);
-  const framework = [...tagFw, ...(widgetClasses ?? [])];
-  if (framework.length > 0) box.frameworkClasses = framework;
+  if (widgetClasses && widgetClasses.length > 0) box.frameworkClasses = widgetClasses;
   return box;
 }

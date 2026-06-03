@@ -26,6 +26,7 @@ import { cloneDeep } from 'lodash';
 import type { ComponentVariable, ComponentVariableValue, Layer } from '@/types';
 import { generateId } from '@/lib/utils';
 import { cleanLayersForComponentCreation } from '@/lib/layer-utils';
+import { getStyleIds } from '@/lib/layer-style-resolve';
 import type { ImportMaterializer } from '@/lib/import/materializer';
 
 /** Minimum subtree size (node count) before a repeated shape is worth extracting. */
@@ -51,7 +52,8 @@ function isPageRegion(layer: Layer): boolean {
 /** A structural signature that ignores ids and content but captures shape. */
 function shapeSignature(layer: Layer): string {
   const tag = layer.settings?.tag ?? '';
-  const styleSig = layer.styleId ? `#${layer.styleId}` : classSig(layer.classes);
+  const ids = getStyleIds(layer);
+  const styleSig = ids.length > 0 ? `#${ids.join('#')}` : classSig(layer.classes);
   const roles = [
     layer.variables?.text ? 't' : '',
     layer.variables?.image ? 'i' : '',

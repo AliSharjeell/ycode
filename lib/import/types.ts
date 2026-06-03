@@ -62,12 +62,22 @@ export interface ImportNode {
   tag?: string;
   /** Reusable style references — base class first, combo classes after. */
   styles?: ImportStyleRef[];
+  /**
+   * Named global styles applied *beneath* the element's own classes, in order
+   * (lowest priority first). These come from the site stylesheet's tag rules
+   * (`h2`, `a`, `p`, …) and the document `body` style — global styling that
+   * isn't a per-element class. Each becomes its own reusable `LayerStyle` at the
+   * bottom of the layer's style stack, mirroring how Webflow's tag/global styles
+   * sit under combo classes.
+   */
+  underlayStyles?: ImportStyleRef[];
   /** Extra one-off classes not tied to a reusable style (highest priority). */
   classes?: string[];
   /**
-   * Lowest-priority layout defaults (e.g. a Webflow widget's built-in framework
-   * CSS that isn't in the clipboard). These are applied *under* the element's
-   * own styles, so they only fill gaps the user's classes don't already set.
+   * Lowest-priority anonymous layout shims (e.g. a Webflow widget's built-in
+   * framework CSS like slider/tab/nav layout, or a button's `inline-block`) that
+   * have no meaningful name of their own. Folded into the lowest reusable style
+   * so they fill gaps without becoming a standalone style.
    */
   frameworkClasses?: string[];
   /** Plain text (newlines denote hard breaks) for text / heading / link nodes. */

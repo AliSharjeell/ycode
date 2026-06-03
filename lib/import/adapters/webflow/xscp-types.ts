@@ -87,10 +87,10 @@ export interface WebflowParseContext {
   /** Resolve a Webflow asset id to its absolute CDN URL (undefined if unknown). */
   resolveAssetUrl: (assetId: string) => string | undefined;
   /**
-   * Tailwind classes for a tag's global-stylesheet rule (e.g. `h2` → the site's
-   * heading color/spacing), applied as lowest-priority `frameworkClasses`.
-   * Empty when no stylesheet is available or the tag has no global rule.
+   * The global-stylesheet rule for a tag (e.g. `h2` → the site's heading
+   * color/spacing) as a named, reusable style ref applied beneath the element's
+   * own classes. Null when no stylesheet is available or the tag has no rule.
    */
-  tagFramework: (tag?: string) => string[];
+  tagUnderlay: (tag?: string) => ImportStyleRef | null;
   buildNode: (node: XscpNode | undefined) => ImportNode | null;
 }

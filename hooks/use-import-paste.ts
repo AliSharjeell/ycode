@@ -27,6 +27,7 @@ import { buildImport } from '@/lib/import';
 import { isWebflowClipboard, parseWebflowClipboard } from '@/lib/import/adapters/webflow';
 import { parseGlobalStylesheet, type GlobalStylesheet } from '@/lib/import/adapters/webflow/global-styles';
 import type { ImportSummary } from '@/lib/import/types';
+import { YCODE_LAYER_CLIPBOARD_SIGNATURE } from '@/stores/useClipboardStore';
 
 // EXPERIMENT: hard-coded published Webflow stylesheet so we can validate global
 // style backfill (section background, text colours, heading colours, fonts)
@@ -294,8 +295,18 @@ export function useImportPaste({
       return;
     }
 
-    // 1. Webflow XSCP payload.
+    // 0. Internal Ycode copy/cut — the layer lives in the clipboard store, and
+    // the OS clipboard only carries our marker (which overwrote any stale
+    // Webflow/Figma payload). Route straight to the normal internal paste.
     const text = readClipboardText(e.clipboardData);
+    if (text.trim() === YCODE_LAYER_CLIPBOARD_SIGNATURE) {
+      e.preventDefault();
+      e.stopPropagation();
+      onNormalPaste();
+      return;
+    }
+
+    // 1. Webflow XSCP payload.
     if (text && isWebflowClipboard(text)) {
       e.preventDefault();
       e.stopPropagation();

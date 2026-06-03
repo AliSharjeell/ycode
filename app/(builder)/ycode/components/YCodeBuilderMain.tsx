@@ -80,6 +80,7 @@ import { useImportPaste } from '@/hooks/use-import-paste';
 
 // 6. Utils/lib
 import { findHomepage } from '@/lib/page-utils';
+import { getStyleIds } from '@/lib/layer-style-resolve';
 import { findLayerById, getClassesString, removeLayerById, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, findParentAndIndex, insertLayerAfter, updateLayerProps, getLayerIndexes, removeRichTextSublayer, canPasteIntoParent, canHaveChildren, LINK_NESTING_ERROR } from '@/lib/layer-utils';
 import { cloneDeep } from 'lodash';
 
@@ -1846,7 +1847,8 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
             const layer = findLayerById(layers, selectedLayerId);
             if (layer) {
               const classes = getClassesString(layer);
-              copyStyleToClipboard(classes, layer.design, layer.styleId, layer.styleOverrides);
+              const ids = getStyleIds(layer);
+              copyStyleToClipboard(classes, layer.design, ids[0], layer.styleOverrides, ids);
             }
           }
         }
@@ -1861,8 +1863,10 @@ export default function YCodeBuilder({ children }: YCodeBuilderProps = {} as YCo
               const styleProps = {
                 classes: style.classes,
                 design: style.design,
-                styleId: style.styleId,
+                styleId: style.styleIds?.[0] ?? style.styleId,
+                styleIds: style.styleIds ?? (style.styleId ? [style.styleId] : undefined),
                 styleOverrides: style.styleOverrides,
+                styleOverridesByStyle: undefined,
               };
 
               if (editingComponentId) {

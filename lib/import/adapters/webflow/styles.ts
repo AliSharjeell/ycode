@@ -10,6 +10,7 @@
 import type { ImportStyleRef } from '@/lib/import/types';
 import { cssToClasses } from '@/lib/import/css';
 import { getAffectedProperties } from '@/lib/tailwind-class-mapper';
+import { splitVariant } from '@/lib/layer-style-resolve';
 import type { XscpAsset, XscpStyle } from '@/lib/import/adapters/webflow/xscp-types';
 import { kebabClassName, type GlobalStylesheet } from '@/lib/import/adapters/webflow/global-styles';
 
@@ -96,25 +97,6 @@ function resolveStyleClasses(style: XscpStyle, resolveAssetUrl: (assetId: string
   }
 
   return classes;
-}
-
-/**
- * Split a Tailwind class into its variant prefix (responsive/state, e.g.
- * `max-lg:hover:`) and the bare utility. Colons inside `[…]` arbitrary values
- * are ignored, so `hover:text-[#605dba]` splits only at the variant colon.
- */
-function splitVariant(cls: string): { prefix: string; base: string } {
-  let depth = 0;
-  let cut = -1;
-  for (let i = 0; i < cls.length; i++) {
-    const c = cls[i];
-    if (c === '[') depth++;
-    else if (c === ']') depth = Math.max(0, depth - 1);
-    else if (c === ':' && depth === 0) cut = i;
-  }
-  return cut === -1
-    ? { prefix: '', base: cls }
-    : { prefix: cls.slice(0, cut + 1), base: cls.slice(cut + 1) };
 }
 
 /** The set of resolvers the Webflow parser threads through `WebflowParseContext`. */

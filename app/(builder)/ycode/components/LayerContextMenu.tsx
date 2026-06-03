@@ -22,6 +22,7 @@ import { usePagesStore } from '@/stores/usePagesStore';
 import { useClipboardStore } from '@/stores/useClipboardStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { canHaveChildren, canPasteIntoParent, LINK_NESTING_ERROR, findLayerById, getClassesString, regenerateInteractionIds, canCopyLayer, canDeleteLayer, regenerateIdsWithInteractionRemapping, removeLayerById, findParentAndIndex, insertLayerAfter, updateLayerProps, canConvertToCollection, isExcludedFromCollection, getCollectionVariable, resetBindingsOnCollectionSourceChange } from '@/lib/layer-utils';
+import { getStyleIds } from '@/lib/layer-style-resolve';
 import { getLayerIcon, getLayerName } from '@/lib/layer-display-utils';
 import { cloneDeep } from 'lodash';
 import { toast } from 'sonner';
@@ -390,7 +391,8 @@ function LayerContextMenuInner({
     if (!layer) return;
 
     const classes = getClassesString(layer);
-    copyStyleToClipboard(classes, layer.design, layer.styleId, layer.styleOverrides);
+    const ids = getStyleIds(layer);
+    copyStyleToClipboard(classes, layer.design, ids[0], layer.styleOverrides, ids);
   };
 
   const handlePasteStyle = () => {
@@ -400,8 +402,10 @@ function LayerContextMenuInner({
     const styleProps = {
       classes: style.classes,
       design: style.design,
-      styleId: style.styleId,
+      styleId: style.styleIds?.[0] ?? style.styleId,
+      styleIds: style.styleIds ?? (style.styleId ? [style.styleId] : undefined),
       styleOverrides: style.styleOverrides,
+      styleOverridesByStyle: undefined,
     };
 
     if (isComponentContext && editingComponentId) {
