@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
+
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -57,6 +60,23 @@ function getActiveMention(text: string, caret: number): { query: string; start: 
 
 function parseUrls(text: string): string[] {
   return Array.from(new Set(text.match(URL_REGEX) ?? [])).map((url) => url.replace(/[.,)]+$/, ''));
+}
+
+let markdownLinkHookRegistered = false;
+
+/** Render assistant markdown to sanitized HTML (links open in a new tab). */
+function renderMarkdown(text: string): string {
+  if (!markdownLinkHookRegistered) {
+    markdownLinkHookRegistered = true;
+    DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+      if (node.tagName === 'A') {
+        node.setAttribute('target', '_blank');
+        node.setAttribute('rel', 'noopener noreferrer');
+      }
+    });
+  }
+  const html = marked.parse(text, { gfm: true, breaks: true, async: false }) as string;
+  return DOMPurify.sanitize(html);
 }
 
 /** Flatten a layer tree into mention candidates (skips the root Body layer). */
@@ -484,6 +504,16 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
   );
 }
 
+function MarkdownText({ text }: { text: string }) {
+  const html = useMemo(() => renderMarkdown(text), [text]);
+  return (
+    <div
+      className="text-xs leading-relaxed break-words [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_ul]:my-1.5 [&_ul]:ml-4 [&_ul]:list-disc [&_ol]:my-1.5 [&_ol]:ml-4 [&_ol]:list-decimal [&_li]:my-0.5 [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:text-xs [&_h2]:font-semibold [&_h3]:font-semibold [&_a]:underline [&_a]:underline-offset-2 [&_strong]:font-semibold [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[11px] [&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-2 [&_blockquote]:pl-2 [&_blockquote]:text-muted-foreground"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
 function ModelPicker({
   model,
   onChange,
@@ -661,9 +691,7 @@ function MessageBubble({
         </div>
       )}
 
-      {message.text && (
-        <div className="text-xs leading-relaxed whitespace-pre-wrap break-words">{message.text}</div>
-      )}
+      {message.text && <MarkdownText text={message.text} />}
 
       {isEmpty && isStreaming && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
