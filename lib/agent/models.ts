@@ -16,6 +16,13 @@ export const AGENT_MODELS: AgentModelOption[] = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8' },
 ];
 
+/**
+ * Model selected by default in the picker. Opus is the strongest builder model,
+ * matching the default users expect from comparable AI site builders. Users can
+ * switch to a cheaper model from the dropdown.
+ */
+export const DEFAULT_AGENT_MODEL = 'claude-opus-4-8';
+
 /** Whether a requested model id is one the agent is allowed to use. */
 export function isAllowedModel(id: string): boolean {
   return AGENT_MODELS.some((model) => model.id === id);

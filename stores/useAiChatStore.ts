@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
+import { DEFAULT_AGENT_MODEL } from '@/lib/agent/models';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
@@ -37,9 +38,24 @@ export interface ChatMessage {
 
 type ChatStatus = 'idle' | 'streaming';
 
+/** A saved conversation, shown in the chat-history dropdown. */
+export interface ChatSession {
+  id: string;
+  /** Derived from the first user message; shown in the history list. */
+  title: string;
+  messages: ChatMessage[];
+  /** Last activity, used for ordering and the relative-time label. */
+  updatedAt: number;
+}
+
 interface AiChatState {
   isOpen: boolean;
+  /** Live messages for the active chat (mirrors the current session). */
   messages: ChatMessage[];
+  /** Id of the active chat session. */
+  currentChatId: string;
+  /** Saved conversations (including the active one once it has messages). */
+  chats: ChatSession[];
   status: ChatStatus;
   error: string | null;
   /** When on, the agent screenshots its work and critiques/fixes it automatically. */
@@ -84,6 +100,12 @@ interface AiChatActions {
   close: () => void;
   toggle: () => void;
   clear: () => void;
+  /** Save the active chat to history and start a fresh, empty conversation. */
+  newChat: () => void;
+  /** Save the active chat, then load a previous conversation by id. */
+  loadChat: (id: string) => void;
+  /** Remove a conversation from history (starts fresh if it was active). */
+  deleteChat: (id: string) => void;
   stop: () => void;
   setAutoReview: (value: boolean) => void;
   setModel: (model: string | null) => void;
@@ -167,6 +189,44 @@ function newId(): string {
   return typeof crypto !== 'undefined' && 'randomUUID' in crypto
     ? crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** Keep only durable message fields for localStorage (drops image data, etc.). */
+function stripMessageForStorage(message: ChatMessage): ChatMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    text: message.text,
+    toolCalls: message.toolCalls,
+    review: message.review,
+  };
+}
+
+const MAX_TITLE_LENGTH = 48;
+
+/** Build a short history title from the first real user message. */
+function deriveChatTitle(messages: ChatMessage[]): string {
+  const firstUser = messages.find((message) => message.role === 'user' && !message.review);
+  const text = firstUser?.text.trim() ?? '';
+  if (!text) return 'New chat';
+  return text.length > MAX_TITLE_LENGTH ? `${text.slice(0, MAX_TITLE_LENGTH).trimEnd()}…` : text;
+}
+
+/**
+ * Fold the active chat's live messages back into the saved `chats` list (newest
+ * first). An empty active chat is dropped rather than saved, so clicking "new
+ * chat" repeatedly never litters the history with blanks.
+ */
+function commitActiveChat(state: Pick<AiChatState, 'chats' | 'currentChatId' | 'messages'>): ChatSession[] {
+  const others = state.chats.filter((chat) => chat.id !== state.currentChatId);
+  if (state.messages.length === 0) return others;
+  const session: ChatSession = {
+    id: state.currentChatId,
+    title: deriveChatTitle(state.messages),
+    messages: state.messages,
+    updatedAt: Date.now(),
+  };
+  return [session, ...others];
 }
 
 export const useAiChatStore = create<AiChatStore>()(
@@ -291,10 +351,12 @@ export const useAiChatStore = create<AiChatStore>()(
       return {
         isOpen: false,
         messages: [],
+        currentChatId: newId(),
+        chats: [],
         status: 'idle',
         error: null,
         autoReview: true,
-        model: null,
+        model: DEFAULT_AGENT_MODEL,
 
         open: () => set({ isOpen: true }),
         close: () => set({ isOpen: false }),
@@ -307,6 +369,39 @@ export const useAiChatStore = create<AiChatStore>()(
           get().stop();
           turnCheckpoints.clear();
           set({ messages: [], error: null });
+        },
+
+        newChat: () => {
+          get().stop();
+          turnCheckpoints.clear();
+          set((state) => ({
+            chats: commitActiveChat(state),
+            currentChatId: newId(),
+            messages: [],
+            error: null,
+          }));
+        },
+
+        loadChat: (id: string) => {
+          if (id === get().currentChatId) return;
+          get().stop();
+          turnCheckpoints.clear();
+          set((state) => {
+            const chats = commitActiveChat(state);
+            const target = chats.find((chat) => chat.id === id);
+            if (!target) return { chats };
+            return { chats, currentChatId: id, messages: target.messages, error: null };
+          });
+        },
+
+        deleteChat: (id: string) => {
+          set((state) => {
+            const chats = state.chats.filter((chat) => chat.id !== id);
+            if (id !== state.currentChatId) return { chats };
+            get().stop();
+            turnCheckpoints.clear();
+            return { chats, currentChatId: newId(), messages: [], error: null };
+          });
         },
 
         revertTurn: async (messageId: string) => {
@@ -340,31 +435,53 @@ export const useAiChatStore = create<AiChatStore>()(
             await runTurn(text, attachment, 0);
           } finally {
             abortController = null;
-            set({ status: 'idle' });
+            // Fold the just-updated messages into the history list so the chat
+            // dropdown shows an up-to-date title and timestamp.
+            set((state) => ({ status: 'idle', chats: commitActiveChat(state) }));
           }
         },
       };
     },
     {
       name: 'ycode-ai-chat',
-      version: 1,
+      version: 2,
+      // v2 dropped the "Default" picker option in favour of an explicit model.
+      // Map the legacy `null` (= "use server default") onto the new default so
+      // returning users land on Opus like everyone else; leave any explicit
+      // model choice (e.g. Sonnet) untouched.
+      migrate: (persisted, fromVersion) => {
+        const state = (persisted ?? {}) as Partial<AiChatState>;
+        if (fromVersion < 2 && (state.model === null || state.model === undefined)) {
+          return { ...state, model: DEFAULT_AGENT_MODEL };
+        }
+        return state;
+      },
       storage: createJSONStorage(() =>
         typeof window !== 'undefined'
           ? window.localStorage
           : { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
       ),
+      // After reload, make sure the restored active conversation is represented in
+      // the history list (also upgrades the legacy single-conversation format).
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        if (state.messages.length > 0 && !state.chats.some((chat) => chat.id === state.currentChatId)) {
+          state.chats = commitActiveChat(state);
+        }
+      },
       // Persist only the durable, lightweight bits. Image data and per-turn revert
       // checkpoints are intentionally dropped to stay under localStorage quota.
       partialize: (state) => ({
         isOpen: state.isOpen,
         autoReview: state.autoReview,
         model: state.model,
-        messages: state.messages.map((message) => ({
-          id: message.id,
-          role: message.role,
-          text: message.text,
-          toolCalls: message.toolCalls,
-          review: message.review,
+        currentChatId: state.currentChatId,
+        messages: state.messages.map(stripMessageForStorage),
+        chats: state.chats.map((chat) => ({
+          id: chat.id,
+          title: chat.title,
+          updatedAt: chat.updatedAt,
+          messages: chat.messages.map(stripMessageForStorage),
         })),
       }),
     },

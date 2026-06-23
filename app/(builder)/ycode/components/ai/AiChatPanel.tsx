@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
@@ -16,12 +17,12 @@ import {
 import { Icon } from '@/components/ui/icon';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
-import { AGENT_MODELS } from '@/lib/agent/models';
+import { AGENT_MODELS, DEFAULT_AGENT_MODEL } from '@/lib/agent/models';
 import { getLayerName } from '@/lib/layer-display-utils';
 import { findLayerById } from '@/lib/layer-utils';
 import { cn } from '@/lib/utils';
 import { useAiChatStore } from '@/stores/useAiChatStore';
-import type { ChatMessage, ImageAttachment, Mention, SelectedLayerRef } from '@/stores/useAiChatStore';
+import type { ChatMessage, ChatSession, ImageAttachment, Mention, SelectedLayerRef } from '@/stores/useAiChatStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
@@ -127,8 +128,12 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
   const setModel = useAiChatStore((s) => s.setModel);
   const revertTurn = useAiChatStore((s) => s.revertTurn);
   const stop = useAiChatStore((s) => s.stop);
-  const clear = useAiChatStore((s) => s.clear);
   const close = useAiChatStore((s) => s.close);
+  const chats = useAiChatStore((s) => s.chats);
+  const currentChatId = useAiChatStore((s) => s.currentChatId);
+  const newChat = useAiChatStore((s) => s.newChat);
+  const loadChat = useAiChatStore((s) => s.loadChat);
+  const deleteChat = useAiChatStore((s) => s.deleteChat);
 
   const selectedLayerIds = useEditorStore((s) => s.selectedLayerIds);
   const currentPageId = useEditorStore((s) => s.currentPageId);
@@ -301,58 +306,38 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
       )}
     >
       {embedded ? (
-        <div className="flex items-center justify-between gap-1 px-4 pt-3 shrink-0">
-          <ModelPicker model={model} onChange={setModel} />
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              className={cn('size-7 p-0', autoReview ? 'text-foreground' : 'text-muted-foreground')}
-              onClick={() => setAutoReview(!autoReview)}
-              aria-pressed={autoReview}
-              aria-label="Auto visual review"
-              title={autoReview ? 'Auto visual review: on' : 'Auto visual review: off'}
-            >
-              <Icon name="eye" className="size-3.5" />
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="size-7 p-0"
-              onClick={clear}
-              disabled={messages.length === 0}
-              aria-label="New chat"
-              title="New chat"
-            >
-              <Icon name="plus" className="size-3.5" />
-            </Button>
-          </div>
+        <div className="flex items-center justify-between gap-2 px-4 pt-3 shrink-0">
+          <ChatHistoryMenu
+            chats={chats}
+            currentChatId={currentChatId}
+            onSelect={loadChat}
+            onDelete={deleteChat}
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            className="size-7 p-0 shrink-0"
+            onClick={newChat}
+            aria-label="New chat"
+            title="New chat"
+          >
+            <Icon name="plus" className="size-3.5" />
+          </Button>
         </div>
       ) : (
-        <div className="flex items-center justify-between px-4 h-12 shrink-0 border-b">
-          <div className="flex items-center gap-2">
-            <Icon name="sparkles" className="size-3.5 text-foreground" />
-            <span className="text-xs font-medium">AI</span>
-            <ModelPicker model={model} onChange={setModel} />
-          </div>
-          <div className="flex items-center gap-1">
-            <Button
-              size="sm"
-              variant="ghost"
-              className={cn('size-7 p-0', autoReview ? 'text-foreground' : 'text-muted-foreground')}
-              onClick={() => setAutoReview(!autoReview)}
-              aria-pressed={autoReview}
-              aria-label="Auto visual review"
-              title={autoReview ? 'Auto visual review: on' : 'Auto visual review: off'}
-            >
-              <Icon name="eye" className="size-3.5" />
-            </Button>
+        <div className="flex items-center justify-between gap-2 px-4 h-12 shrink-0 border-b">
+          <ChatHistoryMenu
+            chats={chats}
+            currentChatId={currentChatId}
+            onSelect={loadChat}
+            onDelete={deleteChat}
+          />
+          <div className="flex items-center gap-1 shrink-0">
             <Button
               size="sm"
               variant="ghost"
               className="size-7 p-0"
-              onClick={clear}
-              disabled={messages.length === 0}
+              onClick={newChat}
               aria-label="New chat"
               title="New chat"
             >
@@ -453,50 +438,64 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
             className="hidden"
             onChange={handleFileChange}
           />
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            onPaste={handlePaste}
-            onBlur={closeMention}
-            placeholder="Ask AI to build, edit, or @mention a page, collection, or layer..."
-            rows={2}
-            className="pl-10 pr-10 resize-none"
-          />
-          <div className="absolute left-2 bottom-2">
-            <Button
-              size="sm"
-              variant="ghost"
-              className="size-7 p-0 text-muted-foreground"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={images.length >= MAX_IMAGES}
-              aria-label="Attach image"
-              title={images.length >= MAX_IMAGES ? `Up to ${MAX_IMAGES} images` : 'Attach image'}
-            >
-              <Icon name="image" className="size-3.5" />
-            </Button>
-          </div>
-          <div className="absolute right-2 bottom-2">
-            {isStreaming ? (
-              <Button
-                size="sm" variant="secondary"
-                className="size-7 p-0" onClick={stop}
-                aria-label="Stop"
-              >
-                <Icon name="stop" className="size-3" />
-              </Button>
-            ) : (
-              <Button
-                size="sm"
-                className="size-7 p-0"
-                onClick={() => submit(input)}
-                disabled={!input.trim() && images.length === 0}
-                aria-label="Send"
-              >
-                <Icon name="arrowLeft" className="size-3.5 rotate-90" />
-              </Button>
-            )}
+          <div className="flex flex-col rounded-lg border border-transparent bg-input transition-colors focus-within:border-ring">
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              onBlur={closeMention}
+              placeholder="Ask AI to build, edit, or @mention a page, collection, or layer..."
+              rows={3}
+              className="min-h-[84px] resize-none border-0 bg-transparent px-3 pt-2.5 pb-1 focus-visible:border-transparent focus-visible:ring-0"
+            />
+            <div className="flex items-center justify-between gap-1 px-2 pb-2">
+              <div className="flex items-center gap-0.5">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="size-7 p-0 text-muted-foreground"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={images.length >= MAX_IMAGES}
+                  aria-label="Attach image"
+                  title={images.length >= MAX_IMAGES ? `Up to ${MAX_IMAGES} images` : 'Attach image'}
+                >
+                  <Icon name="image" className="size-3.5" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className={cn('size-7 p-0', autoReview ? 'text-foreground' : 'text-muted-foreground')}
+                  onClick={() => setAutoReview(!autoReview)}
+                  aria-pressed={autoReview}
+                  aria-label="Auto visual review"
+                  title={autoReview ? 'Auto visual review: on' : 'Auto visual review: off'}
+                >
+                  <Icon name="eye" className="size-3.5" />
+                </Button>
+                <ModelPicker model={model} onChange={setModel} />
+              </div>
+              {isStreaming ? (
+                <Button
+                  size="sm" variant="secondary"
+                  className="size-7 p-0" onClick={stop}
+                  aria-label="Stop"
+                >
+                  <Icon name="stop" className="size-3" />
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className="size-7 p-0"
+                  onClick={() => submit(input)}
+                  disabled={!input.trim() && images.length === 0}
+                  aria-label="Send"
+                >
+                  <Icon name="arrowLeft" className="size-3.5 rotate-90" />
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -530,22 +529,99 @@ function ModelPicker({
           variant="ghost"
           className="h-6 gap-1 px-1.5 text-[11px] text-muted-foreground"
         >
-          {current?.label ?? 'Default model'}
+          {current?.label ?? 'Select model'}
           <Icon name="chevronDown" className="size-3" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuRadioGroup
-          value={model ?? 'default'}
-          onValueChange={(value) => onChange(value === 'default' ? null : value)}
+          value={model ?? DEFAULT_AGENT_MODEL}
+          onValueChange={(value) => onChange(value)}
         >
-          <DropdownMenuRadioItem value="default">Default</DropdownMenuRadioItem>
           {AGENT_MODELS.map((option) => (
             <DropdownMenuRadioItem key={option.id} value={option.id}>
               {option.label}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/** Compact relative timestamp for the history list, e.g. "6h", "7d", "now". */
+function compactTime(timestamp: number): string {
+  const diffSecs = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (diffSecs < 60) return 'now';
+  const mins = Math.floor(diffSecs / 60);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  const weeks = Math.floor(days / 7);
+  if (days < 30) return `${weeks}w`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months}mo`;
+  return `${Math.floor(days / 365)}y`;
+}
+
+function ChatHistoryMenu({
+  chats,
+  currentChatId,
+  onSelect,
+  onDelete,
+}: {
+  chats: ChatSession[];
+  currentChatId: string;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const currentTitle = chats.find((chat) => chat.id === currentChatId)?.title ?? 'New chat';
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="h-8 min-w-0 flex-1 justify-between gap-2 px-2.5 text-xs font-medium"
+        >
+          <span className="truncate">{currentTitle}</span>
+          <Icon name="chevronDown" className="size-3 shrink-0 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-56">
+        {chats.length === 0 ? (
+          <div className="px-2 py-1.5 text-xs text-muted-foreground">No previous chats</div>
+        ) : (
+          chats.map((chat) => (
+            <DropdownMenuItem
+              key={chat.id}
+              onSelect={() => onSelect(chat.id)}
+              className={cn('group gap-2 pr-1.5', chat.id === currentChatId && 'bg-accent')}
+            >
+              <span className="flex-1 truncate text-xs">{chat.title}</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground group-hover:hidden">
+                {compactTime(chat.updatedAt)}
+              </span>
+              <button
+                type="button"
+                aria-label="Delete chat"
+                title="Delete chat"
+                className="hidden size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground group-hover:flex"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onDelete(chat.id);
+                }}
+              >
+                <Icon name="trash" className="size-3" />
+              </button>
+            </DropdownMenuItem>
+          ))
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );
