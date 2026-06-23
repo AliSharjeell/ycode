@@ -94,6 +94,23 @@ function createCollectingHost(sink: CollectedTool[]): CollectingHost {
   };
 }
 
+/**
+ * Tools the in-app agent must NOT expose, even though the shared MCP tool files
+ * register them.
+ *
+ * `publish` pushes every draft live. The in-app builder is a draft-first surface:
+ * the user reviews the agent's edits on the canvas and clicks Publish when ready.
+ * Letting the agent auto-publish made changes go live immediately, so the user's
+ * own Publish button then reported "no changes" (the edits were already live).
+ * Leaving it out keeps the human in control of what ships.
+ *
+ * `get_unpublished_changes` stays available — it is read-only status reporting.
+ *
+ * External MCP clients are unaffected: createMcpServer registers these tools
+ * directly rather than through this registry.
+ */
+const EXCLUDED_AGENT_TOOLS = new Set<string>(['publish']);
+
 let cachedTools: AgentTool[] | null = null;
 
 /**
@@ -112,18 +129,20 @@ export function getAgentTools(): AgentTool[] {
     register(host);
   }
 
-  const tools = collected.map((tool): AgentTool => {
-    const schema = z.object(tool.inputSchema);
-    return {
-      name: tool.name,
-      description: tool.description,
-      inputSchema: tool.inputSchema,
-      execute: async (args) => {
-        const parsed = schema.parse(args ?? {}) as Record<string, unknown>;
-        return tool.handler(parsed);
-      },
-    };
-  });
+  const tools = collected
+    .filter((tool) => !EXCLUDED_AGENT_TOOLS.has(tool.name))
+    .map((tool): AgentTool => {
+      const schema = z.object(tool.inputSchema);
+      return {
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema,
+        execute: async (args) => {
+          const parsed = schema.parse(args ?? {}) as Record<string, unknown>;
+          return tool.handler(parsed);
+        },
+      };
+    });
 
   // Tool names must be unique across files — the LLM and MCP both key on name.
   const seen = new Set<string>();

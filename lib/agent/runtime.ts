@@ -128,6 +128,21 @@ async function executeTool(
   }
 }
 
+/**
+ * Standing policy for the in-app agent, appended to the shared MCP instructions.
+ *
+ * The shared instructions tell the agent to `publish` as the final step of a
+ * build. That is wrong for the in-app builder, which is draft-first: the user
+ * reviews edits on the canvas and clicks Publish themselves. The `publish` tool
+ * is also withheld from the in-app toolset (see registry.ts), so this is belt
+ * and suspenders — it stops the agent from claiming it published.
+ */
+const AGENT_POLICY = [
+  'Never publish. The user controls publishing — they review your changes on the canvas and click the Publish button when ready.',
+  'Do not call any publish tool and do not tell the user their changes are live. Leave everything as drafts.',
+  'After making edits, briefly summarise what you changed and remind the user they can publish when ready.',
+].join(' ');
+
 function buildSystemPrompt(context?: AgentEditorContext): string {
   const lines: string[] = [];
   if (context?.pageId) {
@@ -171,7 +186,9 @@ function buildSystemPrompt(context?: AgentEditorContext): string {
     lines.push(`The user referenced these URLs: ${urls}. You cannot browse the web, so do not invent their contents — use them as link destinations or literal content. If the user wants you to replicate a design from a URL, ask them to paste a screenshot instead.`);
   }
 
-  if (lines.length === 0) return SYSTEM_INSTRUCTIONS;
-
-  return `${SYSTEM_INSTRUCTIONS}\n\n## Current editor context\n\n${lines.join('\n')}`;
+  let prompt = `${SYSTEM_INSTRUCTIONS}\n\n## In-app agent policy\n\n${AGENT_POLICY}`;
+  if (lines.length > 0) {
+    prompt += `\n\n## Current editor context\n\n${lines.join('\n')}`;
+  }
+  return prompt;
 }
