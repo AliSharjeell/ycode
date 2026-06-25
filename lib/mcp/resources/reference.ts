@@ -189,11 +189,28 @@ const ANIMATION_PRESETS_REFERENCE_JSON = JSON.stringify({
   instructions: 'Use add_animation with a preset key for the common cases. Drop down to set_layer_interactions only when you need full GSAP control.',
   presets: PRESET_CATALOG,
   triggers: {
-    click: 'Fires on user click. Use for affordances (pulse, shake).',
+    click: 'Fires on user click. Use for affordances (pulse, shake). With timeline.yoyo: true, consecutive clicks alternate forward/reverse — i.e. a toggle (open then close). See toggle_pattern.',
     hover: 'Fires on mouseenter, reverses on mouseleave. Auto-yoyos so you only define the "to" state.',
     'scroll-into-view': 'Fires once when the element enters the viewport. Default for reveal presets.',
     'while-scrolling': 'Tween is scrubbed by scroll position. Set timeline.scrub. Use for parallax / progress effects.',
     load: 'Fires on page load. Use for loops or on-load entrance choreography.',
+  },
+  toggle_pattern: {
+    description: 'Show/hide toggle for expandable menus (mobile nav), dropdowns, and accordions. No preset exists — use set_layer_interactions. Put a click interaction with timeline.yoyo: true on the trigger (e.g. hamburger button); its tween targets the panel layer (layer_id = the menu being shown/hidden, usually a sibling, NOT the button) and animates display "hidden" -> "visible". apply_styles.display: "on-load" makes the panel start collapsed. Scope to breakpoints ["mobile"] for hamburger menus; use all breakpoints for dropdowns/accordions. For an animated reveal, also tween autoAlpha "0"->"100" and/or height/y with apply_styles on-trigger.',
+    see_also: 'add_layout("navigation-001" | "navigation-002") ships a working responsive mobile menu toggle to reuse.',
+    example: {
+      trigger: 'click',
+      timeline: { breakpoints: ['mobile'], repeat: 0, yoyo: true },
+      tweens: [{
+        layer_id: 'lyr_menu_container (the element shown/hidden, not the button)',
+        position: '>',
+        duration: 0,
+        ease: 'power1.out',
+        from: { display: 'hidden' },
+        to: { display: 'visible' },
+        apply_styles: { display: 'on-load' },
+      }],
+    },
   },
   eases: ANIMATION_EASES,
   tween_value_formats: {
