@@ -381,6 +381,54 @@ Tween value formats (see the animation-presets reference for the full table):
 The presets pick the right \`apply_styles\` mode automatically; you only need to think
 about it when using \`set_layer_interactions\`.
 
+### Show/Hide Toggles & Expandable Menus (mobile nav, dropdowns, accordions)
+
+There is no preset for this — build it with \`set_layer_interactions\`. The core recipe:
+a \`click\` interaction whose timeline has \`yoyo: true\` and a tween that animates
+\`display\` from \`"hidden"\` to \`"visible"\`. \`yoyo\` makes each click alternate forward
+then reverse, so clicks toggle the target open and closed. Mark the display change
+\`apply_styles: { display: "on-load" }\` so the panel starts collapsed on load.
+
+Key points:
+- **The tween's \`layer_id\` is the element being shown/hidden** (the menu / panel /
+  dropdown), which is usually a SIBLING of the trigger — NOT the button that owns the
+  interaction.
+- **The interaction lives on the trigger** (e.g. the hamburger button).
+- **Scope it.** For a mobile hamburger menu use \`breakpoints: ["mobile"]\` so the desktop
+  nav stays inline and only the small-screen menu toggles. For dropdowns / accordions
+  that should work everywhere, use \`["desktop", "tablet", "mobile"]\`.
+- **For an animated reveal** (instead of an instant show), also tween \`autoAlpha\` "0"→"100"
+  and/or \`height\` / \`y\` with a small \`duration\` and \`apply_styles\` \`on-trigger\` for those
+  properties; keep \`display\` on \`on-load\`.
+
+Mobile hamburger menu — button toggles a sibling menu \`div\` on mobile only:
+\`\`\`
+set_layer_interactions({
+  page_id, layer_id: "<hamburger button>",
+  interactions: [{
+    trigger: "click",
+    timeline: { breakpoints: ["mobile"], repeat: 0, yoyo: true },
+    tweens: [{
+      layer_id: "<menu container div>",   // the element shown/hidden, NOT the button
+      position: ">",
+      duration: 0,
+      ease: "power1.out",
+      from: { display: "hidden" },
+      to: { display: "visible" },
+      apply_styles: { display: "on-load" } // starts collapsed
+    }]
+  }]
+})
+\`\`\`
+
+The same pattern powers dropdown menus, FAQ accordions, "read more" panels, and any
+click-to-expand UI — point the tween at the panel you want to reveal.
+
+**Prefer the built-in navigation layouts for navbars:** \`add_layout("navigation-001")\` and
+\`add_layout("navigation-002")\` already ship a responsive header with a working mobile
+menu toggle wired up. Reuse and customize one instead of building the toggle by hand
+unless the user wants a custom structure.
+
 ### Page Settings
 
 **SEO** — Set meta title, description, OG image, and noindex:
