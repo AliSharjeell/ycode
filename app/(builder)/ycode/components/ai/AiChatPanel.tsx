@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
@@ -19,7 +19,7 @@ import { getLayerName } from '@/lib/layer-display-utils';
 import { findLayerById } from '@/lib/layer-utils';
 import { cn } from '@/lib/utils';
 import { useAiChatStore } from '@/stores/useAiChatStore';
-import type { ChatMessage, ChatMessagePart, ChatSession, ChatToolCall, ImageAttachment, Mention, SelectedLayerRef, SessionUsage } from '@/stores/useAiChatStore';
+import type { ChatMessage, ChatMessagePart, ChatSession, ChatToolCall, ImageAttachment, Mention, SelectedLayerRef, SessionUsage, TurnChange } from '@/stores/useAiChatStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useEditorStore } from '@/stores/useEditorStore';
 import { usePagesStore } from '@/stores/usePagesStore';
@@ -53,7 +53,7 @@ function renderMarkdown(text: string): string {
       }
     });
   }
-  const html = marked.parse(text, { gfm: true, breaks: true, async: false }) as string;
+  const html = marked.parse(replaceLayerIdsWithBadges(text), { gfm: true, breaks: true, async: false }) as string;
   return DOMPurify.sanitize(html);
 }
 
@@ -66,6 +66,43 @@ function flattenLayerMentions(layers: Layer[], acc: Mention[] = []): Mention[] {
     if (layer.children?.length) flattenLayerMentions(layer.children, acc);
   }
   return acc;
+}
+
+/** Resolve a layer id to its display name by searching every loaded page draft. */
+function resolveLayerName(id: string): string | null {
+  const drafts = usePagesStore.getState().draftsByPageId;
+  for (const pageId in drafts) {
+    const layer = findLayerById(drafts[pageId].layers, id);
+    if (layer) return getLayerName(layer);
+  }
+  return null;
+}
+
+// Match an "lyr-..." id, optionally wrapped in backticks. The model often writes
+// ids as inline code (`lyr-...`); we must swallow those backticks so the badge
+// HTML isn't injected inside a markdown code span (which marked would escape and
+// render as literal text instead of a styled badge).
+const LAYER_ID_REGEX = /`?(lyr-[0-9a-z]+)`?/gi;
+
+const LAYER_BADGE_HTML_CLASS =
+  'inline-flex items-center align-middle rounded-md bg-secondary px-1 text-[0.92em] font-normal text-secondary-foreground/80';
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Swap raw "lyr-..." ids in assistant text for a name badge (falls back to the
+ * generic label when the layer can't be resolved in a loaded draft). */
+function replaceLayerIdsWithBadges(text: string): string {
+  if (!text.includes('lyr-')) return text;
+  return text.replace(LAYER_ID_REGEX, (_match, id: string) => {
+    const name = resolveLayerName(id) ?? 'layer';
+    return `<span class="${LAYER_BADGE_HTML_CLASS}">${escapeHtml(name)}</span>`;
+  });
 }
 
 const MENTION_ICON: Record<Mention['type'], 'page' | 'database' | 'layers'> = {
@@ -512,31 +549,45 @@ function MessageBubble({
     );
   }
 
-  const isEmpty = !message.text && message.toolCalls.length === 0;
+  // Fall back to text/toolCalls for legacy messages that predate `parts`.
+  const parts: ChatMessagePart[] =
+    message.parts && message.parts.length > 0
+      ? message.parts
+      : [
+        ...message.toolCalls.map((call) => ({ type: 'tool' as const, call })),
+        ...(message.text ? [{ type: 'text' as const, text: message.text }] : []),
+      ];
+
+  // Once a turn runs tools, the whole transcript (narration, tool steps, and the
+  // model's full closing text) collapses under "Thought for Ns". Only a compact
+  // Changes card + a one-line summary stay visible so finished replies are short.
+  // Turns with no tools (e.g. a clarifying question) render as plain text.
+  const hasToolParts = parts.some((part) => part.type === 'tool');
+  const lastPart = parts[parts.length - 1];
+  const closingText = hasToolParts && lastPart?.type === 'text' ? lastPart.text.trim() : '';
+  const shortSummary = clipSummary(closingText);
+  const plainText = hasToolParts ? '' : message.text.trim();
+
+  // Global status is shared across bubbles; only the unfinished (no thinkingMs)
+  // turn is the one actually streaming right now.
+  const isActivelyStreaming = isStreaming && message.thinkingMs === undefined;
 
   return (
     <div className="flex flex-col gap-2">
-      {message.parts && message.parts.length > 0 ? (
-        <MessageParts parts={message.parts} />
-      ) : (
-        <>
-          {message.toolCalls.length > 0 && (
-            <div className="flex flex-col gap-1">
-              {message.toolCalls.map((call) => (
-                <ToolCallRow key={call.id} call={call} />
-              ))}
-            </div>
-          )}
-          {message.text && <MarkdownText text={message.text} />}
-        </>
+      {(hasToolParts || isActivelyStreaming) && (
+        <ThoughtDisclosure
+          parts={parts} thinkingMs={message.thinkingMs}
+          streaming={isActivelyStreaming}
+        />
       )}
 
-      {isEmpty && isStreaming && (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Spinner className="size-3" />
-          <span>Thinking...</span>
-        </div>
+      {!isActivelyStreaming && message.changes && message.changes.length > 0 && (
+        <ChangesCard changes={message.changes} />
       )}
+
+      {!isActivelyStreaming && shortSummary && <MarkdownText text={shortSummary} />}
+
+      {!isActivelyStreaming && plainText && <MarkdownText text={plainText} />}
     </div>
   );
 }
@@ -557,13 +608,14 @@ function ToolCallRow({ call }: { call: ChatToolCall }) {
   );
 }
 
-/**
- * Render an assistant turn's text and tool calls in the order they streamed in.
- * Consecutive tool calls are grouped into a single tight checklist so they read
- * as one step, while text fragments render as separate markdown blocks.
- */
-function MessageParts({ parts }: { parts: ChatMessagePart[] }) {
-  const groups: Array<{ type: 'tools'; calls: ChatToolCall[] } | { type: 'text'; text: string }> = [];
+type PartGroup =
+  | { type: 'tools'; calls: ChatToolCall[] }
+  | { type: 'text'; text: string };
+
+/** Collapse an ordered parts list into render groups, merging consecutive tool
+ * calls into a single tight checklist. */
+function groupParts(parts: ChatMessagePart[]): PartGroup[] {
+  const groups: PartGroup[] = [];
   for (const part of parts) {
     if (part.type === 'tool') {
       const last = groups[groups.length - 1];
@@ -576,9 +628,16 @@ function MessageParts({ parts }: { parts: ChatMessagePart[] }) {
       groups.push({ type: 'text', text: part.text });
     }
   }
+  return groups;
+}
 
+/** The intermediate narration + tool steps, shown inside the collapsed trail.
+ * Narration text is dimmed so the closing summary below stays the focus. */
+function ThinkingTrail({ parts }: { parts: ChatMessagePart[] }) {
+  const groups = groupParts(parts);
+  if (groups.length === 0) return null;
   return (
-    <>
+    <div className="flex flex-col gap-1.5">
       {groups.map((group, index) =>
         group.type === 'tools' ? (
           <div key={index} className="flex flex-col gap-1">
@@ -587,9 +646,115 @@ function MessageParts({ parts }: { parts: ChatMessagePart[] }) {
             ))}
           </div>
         ) : (
-          <MarkdownText key={index} text={group.text} />
+          <div key={index} className="opacity-60">
+            <MarkdownText text={group.text} />
+          </div>
         ),
       )}
-    </>
+    </div>
+  );
+}
+
+/** Condense a verbose closing message into a one-line takeaway: first paragraph,
+ * at most two sentences, capped in length (the full text lives under "Thought").
+ * Headings/bullets the model sometimes emits ("Looks great:") are dropped. */
+function clipSummary(text: string): string {
+  const firstParagraph = text
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .find((block) => block && !/^[#*-]/.test(block) && !/:$/.test(block));
+  if (!firstParagraph) return '';
+
+  const normalized = firstParagraph.replace(/\s+/g, ' ').trim();
+  const sentences = normalized.match(/[^.!?]+[.!?]+(?:\s|$)/g);
+  let summary = sentences && sentences.length > 2 ? sentences.slice(0, 2).join('').trim() : normalized;
+
+  const MAX = 240;
+  if (summary.length > MAX) {
+    const clipped = summary.slice(0, MAX);
+    const stop = Math.max(clipped.lastIndexOf('. '), clipped.lastIndexOf('! '), clipped.lastIndexOf('? '));
+    summary = `${stop > 80 ? clipped.slice(0, stop + 1) : clipped.trimEnd()}…`;
+  }
+  return summary;
+}
+
+/** Human-readable turn duration: "8s", "1m 5s". */
+function formatDuration(ms?: number): string {
+  if (!ms || ms < 1000) return '1s';
+  const totalSeconds = Math.round(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
+/**
+ * Collapsible "Thought for Ns" header wrapping a turn's narration and tool
+ * steps. While streaming it stays expanded with a live spinner; once done it
+ * collapses by default so only the summary + Changes card remain visible.
+ */
+function ThoughtDisclosure({
+  parts,
+  thinkingMs,
+  streaming,
+}: {
+  parts: ChatMessagePart[];
+  thinkingMs?: number;
+  streaming: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const expanded = streaming || open;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <button
+        type="button"
+        onClick={() => {
+          if (!streaming) setOpen((value) => !value);
+        }}
+        disabled={streaming}
+        className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default"
+      >
+        {streaming ? (
+          <Spinner className="size-3" />
+        ) : (
+          <Icon name="chevronRight" className={cn('size-3 transition-transform', open && 'rotate-90')} />
+        )}
+        <span>{streaming ? 'Working…' : `Thought for ${formatDuration(thinkingMs)}`}</span>
+      </button>
+      {expanded && (
+        <div className="ml-1 border-l border-border pl-2.5">
+          <ThinkingTrail parts={parts} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Post-turn summary of which pages changed and how many of their layers were
+ * affected, matching the canvas "Changes" card. */
+function ChangesCard({ changes }: { changes: TurnChange[] }) {
+  const pages = usePagesStore((s) => s.pages);
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground">Changes</div>
+      <div className="flex flex-col">
+        {changes.map((change) => {
+          const page = pages.find((p) => p.id === change.pageId);
+          const isHome = page ? page.is_index && page.page_folder_id === null : false;
+          return (
+            <div
+              key={change.pageId}
+              className="flex items-center gap-2 border-t border-border px-3 py-2 text-xs"
+            >
+              <Icon name={isHome ? 'homepage' : 'page'} className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="flex-1 truncate">{change.pageName}</span>
+              <span className="shrink-0 text-muted-foreground">
+                {change.layerCount} {change.layerCount === 1 ? 'Layer' : 'Layers'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

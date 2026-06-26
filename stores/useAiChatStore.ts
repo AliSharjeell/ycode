@@ -32,6 +32,13 @@ export interface ChatImage {
   dataUrl: string;
 }
 
+/** A page the agent edited during a turn, with how many of its layers changed. */
+export interface TurnChange {
+  pageId: string;
+  pageName: string;
+  layerCount: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -45,6 +52,10 @@ export interface ChatMessage {
   images?: ChatImage[];
   /** Layer/page/collection references the user attached as inline pills. */
   mentions?: Mention[];
+  /** Wall-clock duration of the turn, shown as "Thought for Ns". */
+  thinkingMs?: number;
+  /** Pages this turn edited, with per-page affected layer counts (Changes card). */
+  changes?: TurnChange[];
   /** True for the auto-generated visual self-review turn (rendered compactly). */
   review?: boolean;
   /** True while a pre-turn page snapshot exists and can be restored (not persisted). */
@@ -174,6 +185,27 @@ const turnCheckpoints = new Map<string, { pageId: string; layers: Layer[] }>();
  */
 const turnEditedPageIds = new Set<string>();
 
+/**
+ * Per-turn "before" snapshots of each edited page's layer tree, keyed by page id
+ * then layer id -> signature. Captured on the first tool call that touches a
+ * page (before its draft is mutated) and diffed against the post-turn draft to
+ * count how many layers the turn actually changed (the Changes card). Reset at
+ * the start of every runTurn so the main turn and each review pass get a fresh
+ * baseline.
+ */
+const turnPageBefore = new Map<string, Map<string, string>>();
+
+/** Stable per-node signature (excludes children so each layer is compared on its
+ * own, not rolled up through its descendants). */
+function layerSignatures(layers: Layer[], map = new Map<string, string>()): Map<string, string> {
+  for (const layer of layers) {
+    const { children, ...rest } = layer;
+    map.set(layer.id, JSON.stringify(rest));
+    if (children) layerSignatures(children, map);
+  }
+  return map;
+}
+
 /** How many automatic review passes to run after a user turn. */
 const MAX_REVIEW_DEPTH = 1;
 
@@ -187,7 +219,9 @@ function buildReviewPrompt(pageId: string): string {
     `Here is a screenshot of ${pageLabel} after your changes — this is the page these edits belong to, so review it as that page. ` +
     'Critically review it against my request and good design principles — layout, spacing, alignment, contrast, overflow, readability, and visual hierarchy. ' +
     'If anything looks wrong or low quality, fix it with the tools (using this page id). ' +
-    'If it already looks good, just briefly confirm you are done (do not make changes for the sake of it).'
+    'If it already looks good, do not make changes for the sake of it. ' +
+    'Do not narrate your review, describe the screenshot, or list what looks good or what you checked. ' +
+    'Reply with at most one short sentence (e.g. "Tightened the nav spacing." or "Looks good — no changes needed."), nothing more.'
   );
 }
 
@@ -277,6 +311,8 @@ function stripMessageForStorage(message: ChatMessage): ChatMessage {
     text: message.text,
     toolCalls: message.toolCalls,
     parts: message.parts,
+    thinkingMs: message.thinkingMs,
+    changes: message.changes,
     review: message.review,
   };
 }
@@ -328,6 +364,10 @@ export const useAiChatStore = create<AiChatStore>()(
         const trimmed = text.trim();
         const images = attachment?.images ?? [];
         if (!trimmed && images.length === 0) return;
+
+        // Fresh per-turn baseline for the Changes card and "Thought for Ns".
+        turnPageBefore.clear();
+        const startedAt = Date.now();
 
         const isReview = reviewDepth > 0;
         const promptText = trimmed || 'Use the attached image(s) as a reference for what to build.';
@@ -416,6 +456,32 @@ export const useAiChatStore = create<AiChatStore>()(
           set({ error: error instanceof Error ? error.message : 'Something went wrong' });
           return;
         }
+
+        // Summarize this turn: how long it ran ("Thought for Ns") and which pages
+        // it changed, with a per-page count of affected layers (the Changes card).
+        // We diff each edited page's post-turn draft against the "before" snapshot
+        // captured on the first tool call that touched it.
+        const drafts = usePagesStore.getState().draftsByPageId;
+        const pages = usePagesStore.getState().pages;
+        const changes: TurnChange[] = [];
+        for (const [changedPageId, before] of turnPageBefore) {
+          const after = drafts[changedPageId]?.layers;
+          if (!after) continue;
+          const afterSigs = layerSignatures(after);
+          let layerCount = 0;
+          for (const [layerId, sig] of afterSigs) {
+            if (before.get(layerId) !== sig) layerCount += 1;
+          }
+          if (layerCount > 0) {
+            const pageName = pages.find((p) => p.id === changedPageId)?.name ?? 'Page';
+            changes.push({ pageId: changedPageId, pageName, layerCount });
+          }
+        }
+        patchAssistant((m) => ({
+          ...m,
+          thinkingMs: Date.now() - startedAt,
+          changes: changes.length > 0 ? changes : undefined,
+        }));
 
         // Visual self-review: if this turn changed the page, screenshot it and let
         // the agent critique and fix its own work (one pass).
@@ -698,9 +764,17 @@ function applyEvent(
         syncAiActiveLayerIds();
       }
       // Remember which page(s) the agent edited so the visual self-review targets
-      // the right page instead of whatever is currently open on the canvas.
+      // the right page instead of whatever is currently open on the canvas, and
+      // snapshot each page's layer tree once (before the edit lands in the draft)
+      // so we can count how many layers actually changed for the Changes card.
       if (isVisualMutation(event.name)) {
-        for (const pageId of collectPageIds(event.input)) turnEditedPageIds.add(pageId);
+        for (const pageId of collectPageIds(event.input)) {
+          turnEditedPageIds.add(pageId);
+          if (!turnPageBefore.has(pageId)) {
+            const layers = usePagesStore.getState().draftsByPageId[pageId]?.layers;
+            if (layers) turnPageBefore.set(pageId, layerSignatures(layers));
+          }
+        }
       }
       patchAssistant((m) => {
         const call: ChatToolCall = { id: event.id, name: event.name };

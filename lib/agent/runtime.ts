@@ -2,6 +2,7 @@ import { SYSTEM_INSTRUCTIONS } from '@/lib/mcp/instructions';
 import { DEFAULT_MAX_TOKENS, MAX_TOOL_TURNS } from '@/lib/agent/config';
 import { compactToolResult } from '@/lib/agent/tools/compact-result';
 import { getAgentToolMap, getAgentTools } from '@/lib/agent/tools/registry';
+import { getCachedLayers } from '@/lib/mcp/page-layers';
 
 import type {
   AgentContentBlock,
@@ -57,6 +58,7 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
   const toolMap = getAgentToolMap();
 
   const messages: AgentMessage[] = [...options.messages];
+  await injectActivePageSnapshot(messages, options.context?.pageId);
   const usage = new UsageTotals();
   let totalToolCalls = 0;
   let noOpCorrectionUsed = false;
@@ -205,8 +207,11 @@ const AGENT_POLICY = [
   'Never publish. The user controls publishing — they review your changes on the canvas and click the Publish button when ready.',
   'Do not call any publish tool and do not tell the user their changes are live. Leave everything as drafts.',
   'Only describe edits you actually performed with tools. If you intend to make changes, call the tools to make them in the same turn — never reply that something is done, saved, or drafted unless you have already called the tools that did it.',
+  'A snapshot of the active page\'s current contents is included with the user\'s message. Treat it as the single source of truth for what currently exists. Never claim an element exists or was already added based on earlier conversation — if you are unsure, check the snapshot or call get_layers before answering.',
   'Keep all chat replies short and plain. Write for someone who will skim, not read. Never explain your reasoning, justify design choices, list every property you set, or narrate your steps. No preamble like "Great!" or "Sure", no headings, no bullet-point breakdowns of what you did unless the user explicitly asks for detail.',
-  'When you finish making edits, send ONE brief closing message — one or two sentences describing the end result the user will see on the canvas, in plain language (e.g. "Your Home page is now a clean coming-soon page: a centered headline, a short subtitle, and a subtle dark background."). Do not enumerate the individual changes or settings. Do not remind them to publish unless they ask. If you made no edits yet, do not send that message — make the edits first, or ask one specific clarifying question if the request is unclear.',
+  'Do not think out loud or pre-announce actions. Never write running commentary such as "Let me look at…", "I\'ll check…", "I\'ll add…", "The selected layer is…", "Now I\'ll…", or any step-by-step description before, between, or about your tool calls. Call the tools silently and let your work speak for itself.',
+  'Refer to layers by their name or role in plain language (e.g. "the header", "the call-to-action button"). Never paste raw layer ids (the "lyr-..." strings) into your chat replies, and do not wrap them in backticks — they are noise to the user.',
+  'When you finish making edits, send ONE short closing sentence describing the end result the user will see on the canvas, in plain language (e.g. "Your Home page is now a clean coming-soon page with a centered headline and a subtle dark background."). Hard limit: one or two sentences, no headings, no sections (never write "Looks great:", "Fixed this turn:", "Publish and refresh", or similar), no lists, no recap of the steps you took or problems you found along the way. The user already sees the list of changed pages and layer counts separately, so do not restate them. Do not remind them to publish unless they ask. If you made no edits yet, do not send that message — make the edits first, or ask one specific clarifying question if the request is unclear.',
 ].join(' ');
 
 /**
@@ -248,10 +253,64 @@ function claimsCompletionWithoutEdits(text: string): boolean {
   return false;
 }
 
+/**
+ * Prepend a compact snapshot of the active page's current layer tree to the
+ * latest user message, so the agent always grounds its answer in what actually
+ * exists on the page instead of trusting its own prior-turn claims (the failure
+ * where it insisted a section existed that it never created).
+ *
+ * Injected into the user message (not the cached system prompt) so the large
+ * static system block stays cache-friendly, and scoped to this turn only — it is
+ * never folded back into the persisted conversation history.
+ */
+async function injectActivePageSnapshot(
+  messages: AgentMessage[],
+  pageId?: string | null,
+): Promise<void> {
+  if (!pageId) return;
+
+  let snapshot: string;
+  try {
+    const layers = await getCachedLayers(pageId);
+    snapshot = compactToolResult('get_layers', JSON.stringify(layers));
+  } catch (error) {
+    console.error('[ai-agent] failed to load active page snapshot:', error);
+    return;
+  }
+
+  // Attach to the most recent user turn (the message we're responding to).
+  const lastUserIndex = findLastIndex(messages, (message) => message.role === 'user');
+  if (lastUserIndex === -1) return;
+
+  const block: AgentContentBlock = {
+    type: 'text',
+    text:
+      `Current contents of the active page (id: ${pageId}) — this is the live source of truth right now. ` +
+      `Trust it over anything said earlier in this conversation; do not claim an element exists or was already added unless it appears here:\n` +
+      snapshot,
+  };
+
+  const target = messages[lastUserIndex];
+  messages[lastUserIndex] = { ...target, content: [block, ...target.content] };
+}
+
+/** Array.prototype.findLastIndex isn't available on every runtime target. */
+function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    if (predicate(items[index])) return index;
+  }
+  return -1;
+}
+
 function buildSystemPrompt(context?: AgentEditorContext): string {
   const lines: string[] = [];
   if (context?.pageId) {
-    lines.push(`The user is currently editing page with ID "${context.pageId}". When they refer to "this page", use this ID.`);
+    lines.push(
+      `The user is currently editing the page with ID "${context.pageId}". This is the active page — apply all edits here by default and when they refer to "this page", use this ID. ` +
+        `A snapshot of this page's current contents is included with the user's message. Treat that snapshot as the single source of truth for what exists right now. ` +
+        `Never claim an element exists or was already added unless it appears in that snapshot — do not rely on what earlier messages in this conversation said you did. ` +
+        `Only edit a different page if the user explicitly names another one.`,
+    );
   }
   const selected = context?.selectedLayers?.length
     ? context.selectedLayers
