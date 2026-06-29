@@ -20,7 +20,7 @@ import { buildSvgDataUrl, getAssetProxyUrl } from '@/lib/asset-utils';
 import { generateColorVariablesCss } from '@/lib/repositories/colorVariableRepository';
 import { buildPageHreflangAlternates } from '@/lib/hreflang-utils';
 import { getTranslatableKey } from '@/lib/locale-runtime';
-import { getSiteBaseUrl } from '@/lib/url-utils';
+import { buildAbsolutePageUrl, getSiteBaseUrl } from '@/lib/url-utils';
 
 /** Languages map shape Next.js expects under `metadata.alternates.languages`. */
 type MetadataLanguages = NonNullable<NonNullable<Metadata['alternates']>['languages']>;
@@ -296,6 +296,13 @@ export async function generatePageMetadata(
   // absolute URLs as strings here instead of relying on metadataBase.
   let siteBaseUrl: string | null = null;
 
+  // URL of the current page, shared by canonical and og:url. Prefer an absolute
+  // URL built from the resolved base (canonical / primary domain / Vercel env)
+  // so it's correct on Vercel and cloud even when the route doesn't set
+  // `metadataBase`. Falls back to the relative path locally (no base
+  // configured), which Next.js resolves against `metadataBase` when available.
+  let pageUrl: string | undefined;
+
   // Always fetch global settings — preview mode reads draft assets so the
   // favicon and web clip render before the user publishes.
   const seoSettings = options.globalSeoSettings || await fetchGlobalPageSettings(isPreview);
@@ -306,6 +313,12 @@ export async function generatePageMetadata(
       primaryDomainUrl,
     });
 
+    pageUrl = pagePath === undefined
+      ? undefined
+      : siteBaseUrl
+        ? buildAbsolutePageUrl(siteBaseUrl, pagePath)
+        : pagePath;
+
     // Add Google Site Verification meta tag
     if (seoSettings.googleSiteVerification) {
       metadata.verification = {
@@ -314,15 +327,10 @@ export async function generatePageMetadata(
     }
 
     // Add canonical URL
-    if (seoSettings.globalCanonicalUrl && pagePath !== undefined) {
-      const canonicalBase = seoSettings.globalCanonicalUrl.replace(/\/$/, '');
-      const canonicalUrl = pagePath === '/' || pagePath === ''
-        ? canonicalBase
-        : `${canonicalBase}${pagePath.startsWith('/') ? pagePath : '/' + pagePath}`;
-
+    if (pageUrl !== undefined) {
       metadata.alternates = {
         ...metadata.alternates,
-        canonical: canonicalUrl,
+        canonical: pageUrl,
       };
     }
 
@@ -362,32 +370,37 @@ export async function generatePageMetadata(
   }
 
   // Add Open Graph and Twitter Card metadata (not for error pages)
-  if (seo?.image && !isErrorPage) {
+  if (!isErrorPage) {
     // Resolve image URL (handles both Asset ID string and FieldVariable)
-    let imageUrl = await resolveImageUrl(seo.image, collectionItem);
+    let imageUrl = seo?.image ? await resolveImageUrl(seo.image, collectionItem) : null;
 
     // Make relative URLs absolute — social crawlers require absolute og:image URLs
     if (imageUrl && imageUrl.startsWith('/') && siteBaseUrl) {
       imageUrl = `${siteBaseUrl}${imageUrl}`;
     }
 
-    if (imageUrl) {
+    if (imageUrl || pageUrl !== undefined) {
       metadata.openGraph = {
         title,
         description,
-        images: [
-          {
-            url: imageUrl,
-            width: 1200,
-            height: 630,
-          },
-        ],
+        ...(pageUrl !== undefined ? { url: pageUrl } : {}),
+        ...(imageUrl
+          ? {
+            images: [
+              {
+                url: imageUrl,
+                width: 1200,
+                height: 630,
+              },
+            ],
+          }
+          : {}),
       };
       metadata.twitter = {
-        card: 'summary_large_image',
+        card: imageUrl ? 'summary_large_image' : 'summary',
         title,
         description,
-        images: [imageUrl],
+        ...(imageUrl ? { images: [imageUrl] } : {}),
       };
     }
   }
