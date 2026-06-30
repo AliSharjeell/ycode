@@ -1,5 +1,5 @@
 import { SYSTEM_INSTRUCTIONS } from '@/lib/mcp/instructions';
-import { DEFAULT_MAX_TOKENS, MAX_TOOL_TURNS } from '@/lib/agent/config';
+import { DEFAULT_MAX_TOKENS, MAX_HISTORY_CHARS, MAX_HISTORY_MESSAGES, MAX_TOOL_TURNS } from '@/lib/agent/config';
 import { compactToolResult } from '@/lib/agent/tools/compact-result';
 import { getAgentToolMap, getAgentTools } from '@/lib/agent/tools/registry';
 import { getCachedLayers } from '@/lib/mcp/page-layers';
@@ -64,11 +64,14 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
   const tools = getAgentTools();
   const toolMap = getAgentToolMap();
 
-  const messages: AgentMessage[] = [...options.messages];
+  // Bound the cross-turn history before anything else so a long chat can't push
+  // the request past the model's context window.
+  const messages: AgentMessage[] = trimConversation([...options.messages]);
   await injectActivePageSnapshot(messages, options.context?.pageId);
   const usage = new UsageTotals();
-  let totalToolCalls = 0;
+  let totalMutatingToolCalls = 0;
   let noOpCorrectionUsed = false;
+  let hardTrimUsed = false;
 
   // Per-page pre-edit layer trees (captured the first time a tool touches a page,
   // before it runs) and the set of pages the agent edited. Used to emit an
@@ -104,23 +107,42 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
     let text = '';
     let stopReason: string | null = null;
 
-    for await (const event of provider.streamMessage({ system, messages, tools, model, maxTokens, signal })) {
-      if (event.type === 'text_delta') {
-        text += event.text;
-        yield { type: 'text', text: event.text };
-      } else if (event.type === 'tool_use') {
-        const block: AgentToolUseBlock = {
-          type: 'tool_use',
-          id: event.id,
-          name: event.name,
-          input: event.input,
-        };
-        toolUses.push(block);
-        yield { type: 'tool_call', id: event.id, name: event.name, input: event.input };
-      } else if (event.type === 'message_stop') {
-        stopReason = event.stopReason;
-        usage.add(event.usage);
+    try {
+      for await (const event of provider.streamMessage({ system, messages, tools, model, maxTokens, signal })) {
+        if (event.type === 'text_delta') {
+          text += event.text;
+          yield { type: 'text', text: event.text };
+        } else if (event.type === 'tool_use') {
+          const block: AgentToolUseBlock = {
+            type: 'tool_use',
+            id: event.id,
+            name: event.name,
+            input: event.input,
+          };
+          toolUses.push(block);
+          yield { type: 'tool_call', id: event.id, name: event.name, input: event.input };
+        } else if (event.type === 'message_stop') {
+          stopReason = event.stopReason;
+          usage.add(event.usage);
+        }
       }
+    } catch (error) {
+      // The prompt is too long for the model's context window. It's rejected
+      // before any output, so retrying is safe. Only re-trim on the first turn,
+      // where the history is all plain text/image turns — trimming mid-loop could
+      // orphan a tool_result from its tool_use and make the request invalid. If
+      // it still overflows, tell the user to start a new chat rather than fail
+      // silently.
+      if (isContextOverflowError(error)) {
+        if (!hardTrimUsed && turn === 0) {
+          hardTrimUsed = true;
+          hardTrimConversation(messages);
+          continue;
+        }
+        yield { type: 'error', message: OVERFLOW_MESSAGE };
+        return;
+      }
+      throw error;
     }
 
     if (text.trim()) {
@@ -128,13 +150,12 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
     }
     assistantBlocks.push(...toolUses);
     messages.push({ role: 'assistant', content: assistantBlocks });
-    totalToolCalls += toolUses.length;
 
     if (toolUses.length === 0) {
-      // Safety net: the model ended the run without ever calling a tool but its
-      // reply claims the work is done ("saved as drafts…"). Nudge it once to
+      // Safety net: the run ended with a "the work is done" reply but no editing
+      // tool ever ran (reads like get_layers don't count). Nudge it once to
       // actually perform the edits rather than leaving the user stuck.
-      if (!noOpCorrectionUsed && totalToolCalls === 0 && claimsCompletionWithoutEdits(text)) {
+      if (!noOpCorrectionUsed && totalMutatingToolCalls === 0 && claimsCompletionWithoutEdits(text)) {
         noOpCorrectionUsed = true;
         messages.push({ role: 'user', content: [{ type: 'text', text: NO_OP_CORRECTION }] });
         continue;
@@ -148,6 +169,7 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
 
     const results: AgentToolResultBlock[] = [];
     for (const call of toolUses) {
+      if (!isReadOnlyTool(call.name)) totalMutatingToolCalls += 1;
       // Snapshot each touched page's pre-edit layer tree once, before the tool
       // mutates it, so we can diff it after the run for the Changes card.
       for (const pageId of collectPageIdsFromInput(call.input)) {
@@ -288,18 +310,95 @@ const NO_OP_CORRECTION =
 
 /**
  * Whether assistant text reads like a "the work is done" claim. Used only to
- * detect the no-op failure above, so it is gated on the turn having made zero
- * tool calls. The closing summary the model is told to produce after edits
- * always mentions drafts/publishing, which is the strongest tell.
+ * detect the no-op failure above, so it is gated on the turn having made no
+ * mutating tool calls. The closing summary the model is told to produce after
+ * edits always mentions drafts/publishing, which is the strongest tell.
  */
 function claimsCompletionWithoutEdits(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (/\b(drafts?|publish|reflow)\b/i.test(trimmed)) return true;
+  if (/\b(here you go|all set|all done|good to go|you're all set|done!)\b/i.test(trimmed)) return true;
   if (/\b(i['’]ve|i have)\b[\s\S]{0,40}\b(added|updated|created|changed|applied|made|built|set|saved)\b/i.test(trimmed)) {
     return true;
   }
   return false;
+}
+
+/** Read-only tools that inspect state without changing it. Mirrors the client's
+ * READONLY_TOOL_PREFIXES so the no-op guard only treats edits as "work done". */
+function isReadOnlyTool(name: string): boolean {
+  return ['get_', 'list_', 'export_', 'search_'].some((prefix) => name.startsWith(prefix));
+}
+
+/** Shown to the user when the chat is too large to fit the model's context even
+ * after an aggressive trim — their pages are untouched; a new chat resets it. */
+const OVERFLOW_MESSAGE =
+  'This chat got too long for the model. Start a new chat to keep going — your pages are unchanged.';
+
+/** Rough char-count proxy for a message's token cost (estimated ~chars/4). */
+function estimateMessageChars(message: AgentMessage): number {
+  let total = 0;
+  for (const block of message.content) {
+    if (block.type === 'text') total += block.text.length;
+    else if (block.type === 'image') total += block.data.length;
+    else if (block.type === 'tool_use') total += JSON.stringify(block.input).length;
+    else if (block.type === 'tool_result') total += block.content.length;
+  }
+  return total;
+}
+
+/** Drop leading non-user messages so the conversation starts with a user turn
+ * (Anthropic rejects histories that begin with an assistant message). */
+function dropLeadingAssistants(messages: AgentMessage[]): AgentMessage[] {
+  let start = 0;
+  while (start < messages.length && messages[start].role !== 'user') start += 1;
+  return start > 0 ? messages.slice(start) : messages;
+}
+
+/**
+ * Bound the cross-turn history to a recent window: always keep the latest user
+ * message, then walk backwards adding older messages until the message-count or
+ * char budget is hit. Keeps the request well under the model's context window so
+ * a long chat can't make the agent silently stop editing.
+ */
+function trimConversation(messages: AgentMessage[]): AgentMessage[] {
+  if (messages.length <= 1) return messages;
+
+  const kept: AgentMessage[] = [];
+  let chars = 0;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const isLast = i === messages.length - 1;
+    const size = estimateMessageChars(messages[i]);
+    if (!isLast && (kept.length >= MAX_HISTORY_MESSAGES || chars + size > MAX_HISTORY_CHARS)) {
+      break;
+    }
+    kept.push(messages[i]);
+    chars += size;
+  }
+  kept.reverse();
+  return dropLeadingAssistants(kept);
+}
+
+/** Last-resort trim used after a context-overflow error: keep only the latest
+ * exchange (mutates in place, preserving the snapshot on the final user turn). */
+function hardTrimConversation(messages: AgentMessage[]): void {
+  const trimmed = dropLeadingAssistants(messages.slice(Math.max(0, messages.length - 3)));
+  messages.length = 0;
+  messages.push(...trimmed);
+}
+
+/** Whether an error is the model rejecting the request because the prompt
+ * exceeds its context window (a non-retryable 400 from Anthropic). */
+function isContextOverflowError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (message.includes('prompt is too long') || message.includes('context window')) return true;
+  if (message.includes('too long') && message.includes('maximum')) return true;
+
+  const status = (error as { status?: number })?.status;
+  const type =
+    (error as { error?: { type?: string } })?.error?.type ?? (error as { type?: string })?.type;
+  return status === 400 && type === 'invalid_request_error' && message.includes('token');
 }
 
 /**

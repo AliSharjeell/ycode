@@ -17,6 +17,17 @@ export const DEFAULT_MAX_TOKENS = 8192;
 /** Hard ceiling on tool-calling round trips per user message, to bound runaway loops. */
 export const MAX_TOOL_TURNS = 24;
 
+/**
+ * Cross-turn conversation history budget, applied before the agent runs so a long
+ * chat can't blow past the model's context window (the failure where the agent
+ * silently stops editing on big histories). The oldest turns are dropped first.
+ * `MAX_HISTORY_CHARS` is a rough proxy for tokens (~chars/4) and leaves headroom
+ * for the system prompt, tool schemas, the injected page snapshot, and the
+ * in-turn tool-loop growth.
+ */
+export const MAX_HISTORY_MESSAGES = 24;
+export const MAX_HISTORY_CHARS = 160_000;
+
 const SETTING_API_KEY = 'ai_anthropic_api_key';
 const SETTING_MODEL = 'ai_model';
 

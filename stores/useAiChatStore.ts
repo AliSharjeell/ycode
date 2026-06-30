@@ -235,6 +235,14 @@ const turnChanges = new Map<string, TurnChange>();
 /** How many automatic review passes to run after a user turn. */
 const MAX_REVIEW_DEPTH = 1;
 
+/**
+ * Max prior turns sent with a request, bounding the wire payload. The server
+ * re-trims authoritatively against the model's context window (see
+ * MAX_HISTORY_MESSAGES in lib/agent/config.ts), so this is a soft client cap;
+ * keep it aligned with that server value.
+ */
+const MAX_HISTORY_MESSAGES = 24;
+
 /** Instruction sent alongside the screenshot during an auto-review pass. Names
  * the page explicitly so the agent reviews the page it actually edited and
  * doesn't mistake it for whatever was last open in the canvas. */
@@ -425,6 +433,8 @@ export const useAiChatStore = create<AiChatStore>()(
 
         // History: prior turns as text. Assistant turns that only ran tools still
         // contribute a placeholder so user/assistant roles keep alternating.
+        // Cap to the most recent turns to bound the wire payload (the server
+        // re-trims authoritatively against the model's context window).
         const history = get()
           .messages.map((message) => ({
             role: message.role,
@@ -432,7 +442,8 @@ export const useAiChatStore = create<AiChatStore>()(
           message.text.trim() ||
           (message.role === 'assistant' && message.toolCalls.length > 0 ? '(made the requested edits)' : ''),
           }))
-          .filter((message) => message.content.length > 0);
+          .filter((message) => message.content.length > 0)
+          .slice(-MAX_HISTORY_MESSAGES);
 
         set((state) => ({ messages: [...state.messages, userMessage, assistantMessage], error: null }));
 
