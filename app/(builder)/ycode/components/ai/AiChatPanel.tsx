@@ -68,14 +68,34 @@ function flattenLayerMentions(layers: Layer[], acc: Mention[] = []): Mention[] {
   return acc;
 }
 
+/** Collect every layer id → display name across a tree into the given map. */
+function collectLayerNames(layers: Layer[], acc: Map<string, string>): void {
+  for (const layer of layers) {
+    acc.set(layer.id, getLayerName(layer));
+    if (layer.children?.length) collectLayerNames(layer.children, acc);
+  }
+}
+
+/**
+ * Cached id → display-name map so badge resolution doesn't re-walk every page
+ * draft for each layer id on every markdown render. Rebuilt only when the drafts
+ * object reference changes (i.e. after an edit), and lazily — the walk happens
+ * the first time a badge is resolved after a change, not on every edit.
+ */
+let layerNameCache: { drafts: unknown; map: Map<string, string> } = { drafts: null, map: new Map() };
+
 /** Resolve a layer id to its display name by searching every loaded page draft. */
 function resolveLayerName(id: string): string | null {
   const drafts = usePagesStore.getState().draftsByPageId;
-  for (const pageId in drafts) {
-    const layer = findLayerById(drafts[pageId].layers, id);
-    if (layer) return getLayerName(layer);
+  if (layerNameCache.drafts !== drafts) {
+    const map = new Map<string, string>();
+    for (const pageId in drafts) {
+      const layers = drafts[pageId]?.layers;
+      if (layers) collectLayerNames(layers, map);
+    }
+    layerNameCache = { drafts, map };
   }
-  return null;
+  return layerNameCache.map.get(id) ?? null;
 }
 
 // Match an "lyr-..." id, optionally wrapped in backticks. The model often writes
