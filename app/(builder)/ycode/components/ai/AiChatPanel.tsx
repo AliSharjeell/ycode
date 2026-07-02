@@ -36,6 +36,9 @@ const SUGGESTIONS = [
 
 const URL_REGEX = /\bhttps?:\/\/[^\s]+/gi;
 
+/** Distance from the bottom (px) within which the transcript stays auto-pinned. */
+const STICK_TO_BOTTOM_THRESHOLD = 80;
+
 function parseUrls(text: string): string[] {
   return Array.from(new Set(text.match(URL_REGEX) ?? [])).map((url) => url.replace(/[.,)]+$/, ''));
 }
@@ -213,8 +216,18 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
   const collections = useCollectionsStore((s) => s.collections);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether the view is pinned to the bottom. Updated on user scroll so auto-
+  // scroll only fires when the user is already at (or near) the latest message —
+  // scrolling up to read history mid-stream no longer yanks them back down.
+  const stickToBottomRef = useRef(true);
 
   const isStreaming = status === 'streaming';
+
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_THRESHOLD;
+  };
 
   const mentionCandidates = useMemo<Mention[]>(() => {
     const fromPages: Mention[] = pages.map((page) => ({ type: 'page', id: page.id, label: page.name }));
@@ -246,11 +259,14 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && stickToBottomRef.current) el.scrollTop = el.scrollHeight;
   }, [messages, status]);
 
   const submit = (text: string, mentions: Mention[] = [], images: ImageAttachment[] = []) => {
     if ((!text.trim() && images.length === 0) || isStreaming) return;
+    // Sending a message always jumps to the latest, even if the user had
+    // scrolled up to read earlier history.
+    stickToBottomRef.current = true;
     void sendMessage(text, {
       selectedLayers: selectedRefs,
       images,
@@ -324,7 +340,11 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
         </div>
       )}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 flex flex-col gap-4">
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 flex flex-col gap-4"
+      >
         {messages.length === 0 ? (
           <EmptyState onPick={submit} disabled={isStreaming} />
         ) : (
