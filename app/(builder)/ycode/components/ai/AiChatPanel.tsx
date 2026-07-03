@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Icon } from '@/components/ui/icon';
 import { Spinner } from '@/components/ui/spinner';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { getLayerName } from '@/lib/layer-display-utils';
 import { findLayerById } from '@/lib/layer-utils';
 import { cn } from '@/lib/utils';
@@ -43,6 +44,9 @@ function parseUrls(text: string): string[] {
   return Array.from(new Set(text.match(URL_REGEX) ?? [])).map((url) => url.replace(/[.,)]+$/, ''));
 }
 
+// Configure markdown parsing once rather than passing options on every parse.
+marked.setOptions({ gfm: true, breaks: true });
+
 let markdownLinkHookRegistered = false;
 
 /** Render assistant markdown to sanitized HTML (links open in a new tab). */
@@ -56,7 +60,7 @@ function renderMarkdown(text: string): string {
       }
     });
   }
-  const html = marked.parse(replaceLayerIdsWithBadges(text), { gfm: true, breaks: true, async: false }) as string;
+  const html = marked.parse(replaceLayerIdsWithBadges(text), { async: false }) as string;
   return DOMPurify.sanitize(html);
 }
 
@@ -220,13 +224,27 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
   // scroll only fires when the user is already at (or near) the latest message —
   // scrolling up to read history mid-stream no longer yanks them back down.
   const stickToBottomRef = useRef(true);
+  // Surfaces the "jump to latest" affordance while the user is scrolled up.
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
   const isStreaming = status === 'streaming';
 
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
-    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_THRESHOLD;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_THRESHOLD;
+    stickToBottomRef.current = atBottom;
+    // React bails out when the value is unchanged, so this only re-renders on a
+    // transition into/out of the "scrolled up" state.
+    setShowJumpToLatest(!atBottom);
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    stickToBottomRef.current = true;
+    setShowJumpToLatest(false);
   };
 
   const layerMentions = useMemo<Mention[]>(
@@ -339,28 +357,45 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
         </div>
       )}
 
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        className="flex-1 overflow-y-auto no-scrollbar px-4 py-4 flex flex-col gap-4"
-      >
-        {messages.length === 0 ? (
-          <EmptyState onPick={submit} disabled={isStreaming} />
-        ) : (
-          messages.map((message) => (
-            <MessageBubble
-              key={message.id} message={message}
-              isStreaming={isStreaming}
-              onRevert={revertTurn}
-              onRedo={redoTurn}
-            />
-          ))
-        )}
+      <div className="relative flex-1 min-h-0">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          aria-live="polite"
+          aria-busy={isStreaming}
+          className="absolute inset-0 overflow-y-auto no-scrollbar px-4 py-4 flex flex-col gap-4"
+        >
+          {messages.length === 0 ? (
+            <EmptyState onPick={submit} disabled={isStreaming} />
+          ) : (
+            messages.map((message) => (
+              <MessageBubble
+                key={message.id} message={message}
+                isStreaming={isStreaming}
+                onRevert={revertTurn}
+                onRedo={redoTurn}
+              />
+            ))
+          )}
 
-        {error && (
-          <div className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
-            {error}
-          </div>
+          {error && (
+            <div className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
+        </div>
+
+        {showJumpToLatest && (
+          <Button
+            size="sm"
+            variant="secondary"
+            className="absolute bottom-3 left-1/2 size-8 -translate-x-1/2 rounded-full border p-0 shadow-md"
+            onClick={scrollToBottom}
+            aria-label="Jump to latest message"
+            title="Jump to latest"
+          >
+            <Icon name="chevronDown" className="size-4" />
+          </Button>
         )}
       </div>
 
@@ -406,22 +441,31 @@ function SessionUsageBadge({ usage }: { usage: SessionUsage }) {
     usage.inputTokens + usage.outputTokens + usage.cacheWriteTokens + usage.cacheReadTokens;
   if (total === 0) return null;
 
-  const tooltip = [
-    'Session tokens',
-    `Input: ${usage.inputTokens.toLocaleString()}`,
-    `Output: ${usage.outputTokens.toLocaleString()}`,
-    `Cache write: ${usage.cacheWriteTokens.toLocaleString()}`,
-    `Cache read: ${usage.cacheReadTokens.toLocaleString()}`,
-  ].join('\n');
+  const rows: Array<[string, number]> = [
+    ['Input', usage.inputTokens],
+    ['Output', usage.outputTokens],
+    ['Cache write', usage.cacheWriteTokens],
+    ['Cache read', usage.cacheReadTokens],
+  ];
 
   return (
-    <span
-      title={tooltip}
-      className="flex items-center gap-1 px-1.5 text-[11px] tabular-nums text-muted-foreground"
-    >
-      <Icon name="sparkles" className="size-3" />
-      {formatTokens(total)}
-    </span>
+    <Tooltip>
+      <TooltipTrigger className="flex items-center gap-1 px-1.5 text-[11px] tabular-nums text-muted-foreground">
+        <Icon name="sparkles" className="size-3" />
+        {formatTokens(total)}
+      </TooltipTrigger>
+      <TooltipContent className="tabular-nums">
+        <p className="mb-1 font-medium">Session tokens</p>
+        <div className="flex flex-col gap-0.5">
+          {rows.map(([label, value]) => (
+            <div key={label} className="flex justify-between gap-4">
+              <span className="text-background/70">{label}</span>
+              <span>{value.toLocaleString()}</span>
+            </div>
+          ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -763,6 +807,7 @@ function ThoughtDisclosure({
           if (!streaming) setOpen((value) => !value);
         }}
         disabled={streaming}
+        aria-expanded={expanded}
         className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:cursor-default"
       >
         {streaming ? (
