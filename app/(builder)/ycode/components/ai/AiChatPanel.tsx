@@ -229,6 +229,11 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
     stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < STICK_TO_BOTTOM_THRESHOLD;
   };
 
+  const layerMentions = useMemo<Mention[]>(
+    () => (draftLayers ? flattenLayerMentions(draftLayers) : []),
+    [draftLayers],
+  );
+
   const mentionCandidates = useMemo<Mention[]>(() => {
     const fromPages: Mention[] = pages.map((page) => ({ type: 'page', id: page.id, label: page.name }));
     const fromCollections: Mention[] = collections.map((collection) => ({
@@ -236,14 +241,8 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
       id: collection.id,
       label: collection.name,
     }));
-    const fromLayers: Mention[] = draftLayers ? flattenLayerMentions(draftLayers) : [];
-    return [...fromPages, ...fromCollections, ...fromLayers];
-  }, [pages, collections, draftLayers]);
-
-  const layerMentions = useMemo<Mention[]>(
-    () => (draftLayers ? flattenLayerMentions(draftLayers) : []),
-    [draftLayers],
-  );
+    return [...fromPages, ...fromCollections, ...layerMentions];
+  }, [pages, collections, layerMentions]);
 
   // The canvas selection is sent to the agent as background context only — it is
   // not shown as a pill. Explicit pills come from the composer's @ menu / picker.
