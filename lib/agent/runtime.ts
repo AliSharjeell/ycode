@@ -1,11 +1,13 @@
 import { SYSTEM_INSTRUCTIONS } from '@/lib/mcp/instructions';
 import { DEFAULT_MAX_TOKENS, MAX_HISTORY_CHARS, MAX_HISTORY_MESSAGES, MAX_TOOL_TURNS } from '@/lib/agent/config';
 import { compactToolResult } from '@/lib/agent/tools/compact-result';
+import { buildLoadToolsTool, deferredGroupOf, LOAD_TOOLS_NAME } from '@/lib/agent/tools/deferred';
 import { getAgentToolMap, getAgentTools } from '@/lib/agent/tools/registry';
 import { estimateCostUsd } from '@/lib/agent/models';
 import { getCachedLayers } from '@/lib/mcp/page-layers';
 import { getComponentById } from '@/lib/repositories/componentRepository';
 
+import type { AgentToolGroup } from '@/lib/agent/tools/types';
 import type { Component, ComponentVariant, Layer } from '@/types';
 import type {
   AgentContentBlock,
@@ -73,14 +75,40 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
   const { provider, model, signal } = options;
   const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
   const system = buildSystemPrompt(options.context);
-  const tools = getAgentTools();
+  const allTools = getAgentTools();
   const toolMap = getAgentToolMap();
+
+  // Deferred tool loading: only core tools ship up front (~half the schema
+  // payload); the rest join when the model calls load_tools or calls a
+  // deferred tool directly. When the user is editing a component, the
+  // component tools are the primary editing surface, so preload them.
+  const activeGroups = new Set<AgentToolGroup>(['core']);
+  if (options.context?.componentId) activeGroups.add('components');
+  const loadToolsTool = buildLoadToolsTool();
+  const activeTools = () => [
+    ...allTools.filter((tool) => activeGroups.has(tool.group)),
+    loadToolsTool,
+  ];
 
   // Bound the cross-turn history before anything else so a long chat can't push
   // the request past the model's context window.
   const messages: AgentMessage[] = trimConversation([...options.messages]);
-  await injectActivePageSnapshot(messages, options.context?.pageId);
+  const snapshotPageId = await injectActivePageSnapshot(messages, options.context?.pageId);
   await injectActiveComponentSnapshot(messages, options.context?.componentId, options.context?.variantId);
+  // While no mutating tool has run, the injected snapshot is still the live
+  // truth, so a get_layers call for that page can be answered with a stub
+  // instead of a second copy of the same tree.
+  let snapshotIsFresh = snapshotPageId !== null;
+
+  // One-time snapshot of the fixed per-call prefix so the logs show how much of
+  // each turn is static (system + tools) vs. accumulating history. ~4 chars/token.
+  const initialMessageChars = messages.reduce((sum, m) => sum + JSON.stringify(m.content).length, 0);
+  console.info(
+    `[ai-agent] fixed-prefix system≈${Math.round(system.length / 4)}tok ` +
+      `active_tools=${activeTools().length} ` +
+      `initial_messages=${messages.length} (≈${Math.round(initialMessageChars / 4)}tok incl. page snapshot)`,
+  );
+
   const usage = new UsageTotals();
   let totalMutatingToolCalls = 0;
   let noOpCorrectionUsed = false;
@@ -144,7 +172,7 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
     let stopReason: string | null = null;
 
     try {
-      for await (const event of provider.streamMessage({ system, messages, tools, model, maxTokens, signal })) {
+      for await (const event of provider.streamMessage({ system, messages, tools: activeTools(), model, maxTokens, signal })) {
         if (event.type === 'text_delta') {
           text += event.text;
           yield { type: 'text', text: event.text };
@@ -206,7 +234,49 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
 
     const results: AgentToolResultBlock[] = [];
     for (const call of toolUses) {
-      if (!isReadOnlyTool(call.name)) totalMutatingToolCalls += 1;
+      // Deferred tool loading: honor explicit load_tools calls, and auto-load
+      // the right group when the model calls a deferred tool directly (the
+      // system instructions document those tools, so it often knows the name).
+      if (call.name === LOAD_TOOLS_NAME) {
+        const requested = Array.isArray(call.input.groups) ? call.input.groups : [];
+        for (const group of requested) {
+          if (typeof group === 'string') activeGroups.add(group as AgentToolGroup);
+        }
+        const loaded = activeTools().map((tool) => tool.name).join(', ');
+        results.push({
+          type: 'tool_result',
+          toolUseId: call.id,
+          content: `Loaded. Tools now available: ${loaded}`,
+        });
+        yield { type: 'tool_result', id: call.id, name: call.name, ok: true };
+        continue;
+      }
+      const neededGroup = deferredGroupOf(call.name);
+      if (neededGroup && !activeGroups.has(neededGroup)) {
+        activeGroups.add(neededGroup);
+      }
+
+      if (!isReadOnlyTool(call.name)) {
+        totalMutatingToolCalls += 1;
+        // Any mutation may change what get_layers would return (including
+        // component edits, which affect instances), so stop stubbing.
+        snapshotIsFresh = false;
+      }
+
+      // The page snapshot injected into the user message is still current —
+      // don't pay for a second copy of the same tree.
+      if (snapshotIsFresh && call.name === 'get_layers' && call.input.page_id === snapshotPageId) {
+        const stub: AgentToolResultBlock = {
+          type: 'tool_result',
+          toolUseId: call.id,
+          content:
+            'Unchanged: this page still matches the snapshot included with the user\'s message — use that snapshot. ' +
+            'Call get_layers again after making edits if you need the updated tree.',
+        };
+        results.push(stub);
+        yield { type: 'tool_result', id: call.id, name: call.name, ok: true };
+        continue;
+      }
       // Snapshot each touched page's pre-edit layer tree once, before the tool
       // mutates it, so we can diff it after the run for the Changes card.
       for (const pageId of collectPageIdsFromInput(call.input)) {
@@ -252,6 +322,8 @@ class UsageTotals {
   private output = 0;
   private cacheWrite = 0;
   private cacheRead = 0;
+  /** Per-turn deltas, for a granular breakdown of where tokens accumulate. */
+  private turns: Array<{ input: number; output: number; cacheWrite: number; cacheRead: number }> = [];
 
   add(usage?: AgentUsage): void {
     if (!usage) return;
@@ -259,17 +331,39 @@ class UsageTotals {
     this.output += usage.outputTokens;
     this.cacheWrite += usage.cacheCreationInputTokens ?? 0;
     this.cacheRead += usage.cacheReadInputTokens ?? 0;
+    this.turns.push({
+      input: usage.inputTokens,
+      output: usage.outputTokens,
+      cacheWrite: usage.cacheCreationInputTokens ?? 0,
+      cacheRead: usage.cacheReadInputTokens ?? 0,
+    });
   }
 
   log(model: string, turns: number): void {
     const totalInput = this.input + this.cacheWrite + this.cacheRead;
     const hitRate = totalInput > 0 ? Math.round((this.cacheRead / totalInput) * 100) : 0;
+    const total = this.input + this.output + this.cacheWrite + this.cacheRead;
+    const cost = estimateCostUsd(model, {
+      inputTokens: this.input,
+      outputTokens: this.output,
+      cacheWriteTokens: this.cacheWrite,
+      cacheReadTokens: this.cacheRead,
+    });
     console.info(
-      `[ai-agent] usage model=${model} turns=${turns} ` +
+      `[ai-agent] usage model=${model} turns=${turns} total_tokens=${total} ` +
         `input=${this.input} output=${this.output} ` +
         `cache_write=${this.cacheWrite} cache_read=${this.cacheRead} ` +
-        `cache_hit=${hitRate}%`,
+        `cache_hit=${hitRate}%` +
+        (cost !== null ? ` est_cost=$${cost.toFixed(4)}` : ''),
     );
+    // Per-turn breakdown: shows how fast context (cache_read) grows per round-trip
+    // and which turns emit the expensive output tokens.
+    this.turns.forEach((t, i) => {
+      console.info(
+        `[ai-agent]   turn ${i + 1}: input=${t.input} output=${t.output} ` +
+          `cache_write=${t.cacheWrite} cache_read=${t.cacheRead}`,
+      );
+    });
   }
 
   /** Serialize the totals for this user message into a client-facing event. */
@@ -345,7 +439,9 @@ const TOOL_OUTPUT_NOTE =
   'get_layers returns a compact tree: each node has id, type, optional name (custom name), ' +
   'text (current text content), classes (the live Tailwind classes — your source of truth for current styling), ' +
   'tag, hidden, componentInstance, and children. The verbose `design` object is omitted; read current styling from `classes`. ' +
-  'To change styling, call update_layer_design with only the categories you want — it merges into existing design, so you never need to resend the full design.';
+  'To change styling, call update_layer_design with only the categories you want — it merges into existing design, so you never need to resend the full design. ' +
+  'Only the core building tools are attached up front. Tools for CMS/collections, components, shared styles, animations, localization, and site settings ' +
+  'load on demand — call load_tools with the group(s) you need (its description lists every group and tool) as soon as you know the task requires them, then use the loaded tools normally.';
 
 /**
  * Sent back to the model when it ends a turn claiming the work is done but never
@@ -465,8 +561,8 @@ function isContextOverflowError(error: unknown): boolean {
 async function injectActivePageSnapshot(
   messages: AgentMessage[],
   pageId?: string | null,
-): Promise<void> {
-  if (!pageId) return;
+): Promise<string | null> {
+  if (!pageId) return null;
 
   let snapshot: string;
   try {
@@ -474,12 +570,12 @@ async function injectActivePageSnapshot(
     snapshot = compactToolResult('get_layers', JSON.stringify(layers));
   } catch (error) {
     console.error('[ai-agent] failed to load active page snapshot:', error);
-    return;
+    return null;
   }
 
   // Attach to the most recent user turn (the message we're responding to).
   const lastUserIndex = findLastIndex(messages, (message) => message.role === 'user');
-  if (lastUserIndex === -1) return;
+  if (lastUserIndex === -1) return null;
 
   const block: AgentContentBlock = {
     type: 'text',
@@ -491,6 +587,7 @@ async function injectActivePageSnapshot(
 
   const target = messages[lastUserIndex];
   messages[lastUserIndex] = { ...target, content: [block, ...target.content] };
+  return pageId;
 }
 
 /** A component's variants, backfilling a single "Default" entry for legacy

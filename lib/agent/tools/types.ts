@@ -28,4 +28,13 @@ export interface AgentTool {
   inputSchema: z.ZodRawShape;
   /** Validate `args` against `inputSchema`, then run the underlying handler. */
   execute: (args: Record<string, unknown>) => Promise<AgentToolResult>;
+  /** Deferred-loading group. Only `core` tools are sent to the model up front. */
+  group: AgentToolGroup;
 }
+
+/**
+ * Tool groups for deferred loading. `core` tools are always sent to the model;
+ * every other group is withheld until the agent asks for it via `load_tools`,
+ * cutting the fixed tool-schema payload roughly in half for typical requests.
+ */
+export type AgentToolGroup = 'core' | 'cms' | 'components' | 'styles' | 'animations' | 'localization' | 'site';

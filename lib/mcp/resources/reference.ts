@@ -128,6 +128,7 @@ const DESIGN_REFERENCE_JSON = JSON.stringify({
       flexDirection: { type: 'enum', values: ['row', 'column', 'row-reverse', 'column-reverse'] },
       justifyContent: { type: 'enum', values: ['start', 'end', 'center', 'between', 'around', 'evenly'] },
       alignItems: { type: 'enum', values: ['start', 'end', 'center', 'baseline', 'stretch'] },
+      alignSelf: { type: 'enum', values: ['auto', 'start', 'end', 'center', 'stretch', 'baseline'], description: 'Override parent alignItems for this child. Flex children stretch full-width by default — use start/center on badges and buttons in a flex column.' },
       gap: { type: 'css_value', examples: ['16px', '1rem'] },
       gridTemplateColumns: { type: 'string', examples: ['4', '1fr 1fr 1fr', 'repeat(3, 1fr)'], description: 'A bare integer is accepted and normalized to repeat(N, 1fr).' },
     },

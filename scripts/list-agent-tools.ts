@@ -19,10 +19,12 @@ const origLoad = (Module as any)._load;
 // Required AFTER the patch so the server-only modules load cleanly.
 const { getAgentTools, getAgentToolMap } = require('@/lib/agent/tools/registry');
 const { toAnthropicTool } = require('@/lib/agent/tools/to-anthropic');
+const { buildLoadToolsTool } = require('@/lib/agent/tools/deferred');
 
 interface AgentToolLike {
   name: string;
   description: string;
+  group: string;
 }
 
 const requested = process.argv[2];
@@ -42,20 +44,30 @@ console.log(`Shared agent registry: ${tools.length} tools\n`);
 
 let converted = 0;
 let payloadChars = 0;
+const groupChars = new Map<string, number>();
 const failures: string[] = [];
 for (const tool of tools) {
   try {
-    payloadChars += JSON.stringify(toAnthropicTool(tool)).length;
+    const chars = JSON.stringify(toAnthropicTool(tool)).length;
+    payloadChars += chars;
+    groupChars.set(tool.group, (groupChars.get(tool.group) ?? 0) + chars);
     converted += 1;
   } catch (err) {
     failures.push(`${tool.name}: ${err instanceof Error ? err.message : String(err)}`);
   }
   const summary = tool.description.split('\n')[0].slice(0, 70);
-  console.log(`  ${tool.name.padEnd(34)} ${summary}`);
+  console.log(`  ${tool.name.padEnd(34)} ${tool.group.padEnd(12)} ${summary}`);
 }
 
 console.log(`\nAnthropic schema conversion: ${converted}/${tools.length} succeeded.`);
 console.log(`Total Anthropic tools payload: ${payloadChars} chars (~${Math.round(payloadChars / 4)} tokens).`);
+const loadToolsChars = JSON.stringify(toAnthropicTool(buildLoadToolsTool())).length;
+const coreChars = (groupChars.get('core') ?? 0) + loadToolsChars;
+console.log(`Sent up front (core + load_tools): ${coreChars} chars (~${Math.round(coreChars / 4)} tokens).`);
+console.log('Per group:');
+for (const [group, chars] of [...groupChars.entries()].sort((a, b) => b[1] - a[1])) {
+  console.log(`  ${group.padEnd(14)} ${String(chars).padStart(7)} chars (~${Math.round(chars / 4)} tokens)`);
+}
 if (failures.length > 0) {
   console.log('Failures:');
   failures.forEach((f) => console.log(`  - ${f}`));

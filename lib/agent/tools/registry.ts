@@ -20,7 +20,7 @@ import { registerSettingsTools } from '@/lib/mcp/tools/settings';
 import { registerPublishingTools } from '@/lib/mcp/tools/publishing';
 import { registerAnimationTools } from '@/lib/mcp/tools/animations';
 
-import type { AgentTool, AgentToolResult } from './types';
+import type { AgentTool, AgentToolGroup, AgentToolResult } from './types';
 
 /**
  * Shared, framework-agnostic tool registry.
@@ -40,26 +40,39 @@ type ToolRegistrar = (server: McpServer) => void;
  * (registerReferenceResources / registerSiteResources), which expose read-only
  * MCP resources rather than callable tools.
  */
-const TOOL_REGISTRARS: ToolRegistrar[] = [
-  registerPageTools,
-  registerPageFolderTools,
-  registerLayerTools,
-  registerBatchTools,
-  registerLayoutTools,
-  registerCollectionTools,
-  registerCollectionLayerTools,
-  registerStyleTools,
-  registerAssetTools,
-  registerAssetFolderTools,
-  registerComponentTools,
-  registerColorVariableTools,
-  registerFontTools,
-  registerLocaleTools,
-  registerFormTools,
-  registerSettingsTools,
-  registerPublishingTools,
-  registerAnimationTools,
+const TOOL_REGISTRARS: Array<[ToolRegistrar, AgentToolGroup]> = [
+  [registerPageTools, 'core'],
+  [registerPageFolderTools, 'site'],
+  [registerLayerTools, 'core'],
+  [registerBatchTools, 'core'],
+  [registerLayoutTools, 'core'],
+  [registerCollectionTools, 'cms'],
+  [registerCollectionLayerTools, 'cms'],
+  [registerStyleTools, 'styles'],
+  [registerAssetTools, 'core'],
+  [registerAssetFolderTools, 'site'],
+  [registerComponentTools, 'components'],
+  [registerColorVariableTools, 'core'],
+  [registerFontTools, 'core'],
+  [registerLocaleTools, 'localization'],
+  [registerFormTools, 'site'],
+  [registerSettingsTools, 'site'],
+  [registerPublishingTools, 'site'],
+  [registerAnimationTools, 'animations'],
 ];
+
+/**
+ * Per-tool group overrides for tools whose registrar default doesn't fit.
+ * Redirects are registered by the pages file but are site-level config, and
+ * form-submission settings live in the layers file but building a working
+ * contact form is a core task.
+ */
+const TOOL_GROUP_OVERRIDES: Record<string, AgentToolGroup> = {
+  list_redirects: 'site',
+  add_redirect: 'site',
+  update_redirect: 'site',
+  delete_redirect: 'site',
+};
 
 /** The raw handler shape every tool file passes as the 4th arg to server.tool. */
 type RawToolHandler = (args: Record<string, unknown>) => Promise<AgentToolResult>;
@@ -69,6 +82,7 @@ interface CollectedTool {
   description: string;
   inputSchema: z.ZodRawShape;
   handler: RawToolHandler;
+  group: AgentToolGroup;
 }
 
 /** The single `server.tool(...)` overload every tool file actually uses. */
@@ -86,10 +100,10 @@ interface CollectingHost {
  * wiring them to an MCP transport. Only the 4-arg overload is used by the
  * tool files (verified across all of lib/mcp/tools), so that is all we capture.
  */
-function createCollectingHost(sink: CollectedTool[]): CollectingHost {
+function createCollectingHost(sink: CollectedTool[], group: AgentToolGroup): CollectingHost {
   return {
     tool(name, description, inputSchema, handler) {
-      sink.push({ name, description, inputSchema, handler });
+      sink.push({ name, description, inputSchema, handler, group: TOOL_GROUP_OVERRIDES[name] ?? group });
     },
   };
 }
@@ -124,9 +138,8 @@ export function getAgentTools(): AgentTool[] {
   if (cachedTools) return cachedTools;
 
   const collected: CollectedTool[] = [];
-  const host = createCollectingHost(collected) as unknown as McpServer;
-  for (const register of TOOL_REGISTRARS) {
-    register(host);
+  for (const [register, group] of TOOL_REGISTRARS) {
+    register(createCollectingHost(collected, group) as unknown as McpServer);
   }
 
   const tools = collected
@@ -137,6 +150,7 @@ export function getAgentTools(): AgentTool[] {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
+        group: tool.group,
         execute: async (args) => {
           const parsed = schema.parse(args ?? {}) as Record<string, unknown>;
           return tool.handler(parsed);

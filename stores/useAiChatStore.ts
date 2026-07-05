@@ -3,7 +3,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
-import { DEFAULT_AGENT_MODEL } from '@/lib/agent/models';
+import { DEFAULT_AGENT_MODEL, REVIEW_AGENT_MODEL } from '@/lib/agent/models';
 import { syncLayerAssets } from '@/lib/canvas-asset-sync';
 import { findAddedLayerIds } from '@/lib/layer-utils';
 import { useComponentsStore } from '@/stores/useComponentsStore';
@@ -239,6 +239,14 @@ const turnChanges = new Map<string, TurnChange>();
 
 /** How many automatic review passes to run after a user turn. */
 const MAX_REVIEW_DEPTH = 1;
+
+/**
+ * Skip the self-review pass when a turn touched fewer layers than this. A
+ * review turn re-runs the full agent (system prompt + tools + screenshot), so
+ * spending it on a one-layer tweak (a text edit, a color change) costs more
+ * than it catches. Section builds and layout work clear this easily.
+ */
+const MIN_CHANGED_LAYERS_FOR_REVIEW = 3;
 
 /**
  * Max prior turns sent with a request, bounding the wire payload. The server
@@ -488,7 +496,9 @@ export const useAiChatStore = create<AiChatStore>()(
               selectedLayers: attachment?.selectedLayers ?? [],
               mentions: attachment?.mentions ?? [],
               referenceUrls: attachment?.referenceUrls ?? [],
-              model: get().model ?? undefined,
+              // Review passes always run on the cheaper review model; the
+              // user's pick only applies to the main turn.
+              model: isReview ? REVIEW_AGENT_MODEL : get().model ?? undefined,
             }),
             signal,
           });
@@ -538,10 +548,13 @@ export const useAiChatStore = create<AiChatStore>()(
           canRevert: canRevert || undefined,
         }));
 
-        // Visual self-review: if this turn actually changed layers, screenshot the
-        // edited page and let the agent critique and fix its own work (one pass).
+        // Visual self-review: if this turn changed enough layers to warrant a
+        // second look, screenshot the edited page and let the agent critique
+        // and fix its own work (one pass). Tiny tweaks skip it — the review
+        // costs a full extra agent turn.
         if (get().autoReview && reviewDepth < MAX_REVIEW_DEPTH && !signal.aborted) {
-          const changedVisuals = changes.length > 0;
+          const changedLayerCount = changes.reduce((total, change) => total + change.layerCount, 0);
+          const changedVisuals = changedLayerCount >= MIN_CHANGED_LAYERS_FOR_REVIEW;
           // Review the page the agent actually edited, not whatever is open on the
           // canvas — otherwise the agent critiques the wrong page and "fixes" it.
           const reviewPageId = resolveReviewPageId(pageId);

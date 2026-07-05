@@ -109,6 +109,7 @@ Each layer's \`design\` object controls its appearance. Use update_layer_design 
 - flexDirection: "row" | "column" | "row-reverse" | "column-reverse"
 - justifyContent: "start" | "end" | "center" | "between" | "around" | "evenly"
 - alignItems: "start" | "end" | "center" | "baseline" | "stretch"
+- alignSelf: "auto" | "start" | "end" | "center" | "stretch" | "baseline" — overrides the parent's alignItems for one child. Flex children stretch full-width by default, so badges, pills, and buttons inside a flex column need alignSelf "start"/"center" (or alignItems on the parent) to hug their content
 - gap: CSS value ("16px", "1rem")
 - gridTemplateColumns: "4" (bare integer count, normalized to repeat(N, 1fr)), "1fr 1fr 1fr", "repeat(3, 1fr)"
 
@@ -365,36 +366,46 @@ asks for a restyle.
 
 ### CRITICAL: Use Pre-Built Layouts First
 
-YCode has 48 professionally designed layout templates. **ALWAYS use these instead of building from scratch.**
+YCode has professionally designed, fully-styled layout templates. **ALWAYS prefer these over building
+from scratch** — one \`add_layout\` call inserts a complete, well-structured section server-side, which
+is far faster, cheaper, and higher quality than hand-building the same section with \`batch_operations\`.
 
+The full catalog is below — call \`add_layout\` directly with a key, you do NOT need \`list_layouts\` first:
 \`\`\`
-1. list_layouts()           → see all available templates by category
-2. add_layout({ key: "hero-002", page_id: "...", parent_layer_id: "body" })
-3. add_layout({ key: "features-001", page_id: "...", parent_layer_id: "body" })
-4. add_layout({ key: "footer-001", page_id: "...", parent_layer_id: "body" })
+Navigation:   navigation-001, navigation-002
+Header:       header-001 … header-004
+Hero:         hero-001 … hero-005
+Features:     features-001 … features-012
+Blog header:  blog-headers-001 … blog-headers-004
+Blog posts:   blog-posts-001 … blog-posts-006
+Stats:        stats-001 … stats-003
+Team:         team-001, team-002
+Testimonials: testimonials-001 … testimonials-005
+Pricing:      pricing-001
+FAQ:          faq-001
+Footer:       footer-001 … footer-003
 \`\`\`
+(\`list_layouts\` still exists if you want preview image URLs, but skip it for normal builds — the keys
+above are enough.)
 
-**Available categories:** Hero (5), Header (4), Features (12), Blog (6), Blog Header (4), Stats (3), Pricing (1), Team (2), Testimonials (5), FAQ (1), Navigation (2), Footer (3)
+### Page Building Workflow (minimize round-trips)
 
-After adding layouts, customize the text content and images. This produces better results than building from scratch.
-
-### Page Building Workflow
-
-1. **Plan**: Decide which sections the page needs (header, hero, features, CTA, footer)
-2. **Add layouts**: Use \`add_layout\` for each section — this gives you a well-structured, well-designed starting point
-3. **Customize content**: Update text, upload and set images, configure links
-4. **Verify structure**: Call \`get_layers\` to confirm the tree looks correct
-5. **Refine design**: Adjust colors, typography, spacing to match the desired style
-6. **Add hover states**: Add subtle hover effects on buttons and interactive elements
+1. **Plan** the sections the page needs (e.g. header, hero, features, pricing, footer).
+2. **Add every matching layout up front** — issue the \`add_layout\` calls for all sections you need
+   (they append in order). Then customize text/images and tweak colors, spacing, and hover states.
+3. **Do NOT call \`get_layers\` just to "verify"** after building. The active-page snapshot is included
+   with the user's message and each edit tool returns what it changed. Only call \`get_layers\` when you
+   genuinely need the current tree (e.g. to target a layer you can't otherwise identify), and never
+   twice in a row without an edit in between.
+4. **Batch aggressively.** Group related edits into a single \`batch_operations\` call rather than many
+   small calls — every extra tool round-trip re-sends the whole context and is the main driver of cost.
 
 ### When to Build from Scratch
 
-Only use \`batch_operations\` to build sections manually when:
-- No layout template matches the design
-- You need a highly custom or unique layout
-- The user specifically requests custom structure
-
-When building manually, **always follow the mandatory structure**.
+Only use \`batch_operations\` to build a section manually when no layout template fits the design, the
+user asked for a custom/unique layout, or you're adding a small custom section. Hand-building is the
+expensive path (large output every time) — reach for a layout first. When you do build manually,
+**always follow the mandatory structure** and do it in as few \`batch_operations\` calls as possible.
 
 ### Mandatory Structure: section → container → content
 
@@ -407,13 +418,47 @@ section (full-width, padding top/bottom)
 \`\`\`
 
 This is the ONLY correct way to structure page sections. The container constrains content
-width and adds horizontal padding. Build it in one \`batch_operations\` call: add the section
-(ref_id "hero"), the container div inside it, a content wrapper, then headings / text /
-button rows — setting \`design\` inline on each add_layer.
+width and adds horizontal padding.
 
-### Verify After Building
+**Worked example** — one \`batch_operations\` call, design set inline on each add_layer:
+\`\`\`
+batch_operations({ page_id: "...", operations: [
+  { type: "add_layer", parent_layer_id: "body", template: "section", ref_id: "hero",
+    design: { layout: { isActive: true, display: "Flex", flexDirection: "column", alignItems: "center" },
+              spacing: { isActive: true, paddingTop: "120px", paddingBottom: "80px" } } },
+  { type: "add_layer", parent_layer_id: "hero", template: "div", ref_id: "container", custom_name: "Container",
+    design: { layout: { isActive: true, display: "Flex", flexDirection: "column", alignItems: "center", gap: "24px" },
+              sizing: { isActive: true, width: "100%", maxWidth: "1280px" },
+              spacing: { isActive: true, paddingLeft: "32px", paddingRight: "32px" } } },
+  { type: "add_layer", parent_layer_id: "container", template: "heading", ref_id: "title",
+    text_content: "Build something amazing",
+    design: { typography: { isActive: true, fontSize: "56px", fontWeight: "700", lineHeight: "1.05",
+              letterSpacing: "-0.03em", textAlign: "center", textWrap: "balance" } } },
+  { type: "add_layer", parent_layer_id: "container", template: "text", ref_id: "subtitle",
+    text_content: "A short description that explains the value proposition clearly.",
+    design: { typography: { isActive: true, fontSize: "18px", lineHeight: "1.7", color: "#737373", textAlign: "center" },
+              sizing: { isActive: true, maxWidth: "560px" } } },
+  { type: "add_layer", parent_layer_id: "container", template: "button", ref_id: "cta", text_content: "Get Started",
+    design: { typography: { isActive: true, fontWeight: "500" },
+              spacing: { isActive: true, paddingTop: "12px", paddingBottom: "12px", paddingLeft: "24px", paddingRight: "24px" },
+              backgrounds: { isActive: true, backgroundColor: "#171717" },
+              borders: { isActive: true, borderRadius: "8px" } } },
+  // Responsive: adjust for small screens with breakpoint update_design ops
+  { type: "update_design", layer_id: "title", breakpoint: "mobile",
+    design: { typography: { isActive: true, fontSize: "36px" } } },
+  { type: "update_design", layer_id: "hero", breakpoint: "mobile",
+    design: { spacing: { isActive: true, paddingTop: "72px", paddingBottom: "56px" } } }
+]})
+\`\`\`
 
-After building any section, call \`get_layers\` and check:
+Follow this shape for every section you build from scratch: design inline on add_layer,
+ref_ids for later targeting, multi-column grids on the container (gridTemplateColumns) that
+collapse to one column via a mobile-breakpoint update_design.
+
+### Self-check while building (no extra get_layers call)
+
+As you build, make sure each section satisfies these — verify from the ref_ids and design you just
+sent, NOT by re-fetching the tree:
 1. Every section has a container div child with maxWidth "1280px"
 2. Text elements have typography design (fontSize, fontWeight, lineHeight)
 3. No content sits directly in a section without a container
@@ -431,6 +476,7 @@ After building any section, call \`get_layers\` and check:
 - **NEVER** create more than 4-5 different font sizes on a page — maintain typographic hierarchy
 - **NEVER** skip the container pattern even for full-width background sections — the section handles the background, the container constrains the content
 - **NEVER** build form fields from \`div\`, styled \`text\`, or \`htmlEmbed\` — ALWAYS use the native \`form\`, \`input\`, \`textarea\`, \`select\`, \`checkbox\`, \`radio\`, and \`label\` elements so submission, validation, and editing work
+- **NEVER** leave a badge, pill, tag, or button stretched full-width inside a flex column — flex children stretch by default (align-items: stretch). Set alignSelf "start"/"center" on the child (layout category), or alignItems on the parent, so it hugs its content. Padding + borderRadius alone will NOT fix this
 
 ### Typography Rules
 

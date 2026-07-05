@@ -10,6 +10,7 @@ function makeTool(inputSchema: z.ZodRawShape): AgentTool {
     name: 'test_tool',
     description: 'A test tool.',
     inputSchema,
+    group: 'core',
     execute: async () => ({ content: [] }),
   };
 }

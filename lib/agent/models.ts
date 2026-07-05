@@ -23,6 +23,15 @@ export const AGENT_MODELS: AgentModelOption[] = [
  */
 export const DEFAULT_AGENT_MODEL = 'claude-sonnet-5';
 
+/**
+ * Model for the automatic visual self-review pass. Critiquing a screenshot and
+ * making small fixes doesn't need the strongest builder model, and the review
+ * turn re-runs the full system + tools prompt — on Opus that doubles an
+ * already 2.5x-priced turn. Pinning Sonnet keeps review cost flat regardless
+ * of the main model choice.
+ */
+export const REVIEW_AGENT_MODEL = 'claude-sonnet-5';
+
 /** Whether a requested model id is one the agent is allowed to use. */
 export function isAllowedModel(id: string): boolean {
   return AGENT_MODELS.some((model) => model.id === id);
