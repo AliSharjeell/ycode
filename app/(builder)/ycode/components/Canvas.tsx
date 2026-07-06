@@ -633,6 +633,36 @@ const Canvas = React.memo(function Canvas({
     styleEl.textContent = customHeadCss;
   }, [iframeReady, customHeadCss]);
 
+  // Inject the server-compiled Tailwind stylesheet for the current page — the
+  // same `generated_css` published pages inject via PageRenderer. The canvas's
+  // Tailwind Browser CDN JIT is unreliable for large bulk inserts (AI/MCP page
+  // builds), so it would leave layers unstyled ("black and white") until
+  // publish. Injecting the precompiled CSS gives a reliable baseline; the CDN
+  // still layers on top for live single-property edits made in the builder.
+  // Skipped while editing a component (no page draft is bound to the canvas).
+  const generatedCss = usePagesStore((state) =>
+    pageId && !editingComponentId ? state.draftsByPageId[pageId]?.generated_css ?? '' : ''
+  );
+
+  useEffect(() => {
+    if (!iframeReady || !iframeRef.current) return;
+    const iframeDoc = iframeRef.current.contentDocument;
+    if (!iframeDoc) return;
+
+    const STYLE_ID = 'ycode-canvas-styles';
+    let styleEl = iframeDoc.getElementById(STYLE_ID) as HTMLStyleElement | null;
+    if (!generatedCss) {
+      styleEl?.remove();
+      return;
+    }
+    if (!styleEl) {
+      styleEl = iframeDoc.createElement('style');
+      styleEl.id = STYLE_ID;
+      iframeDoc.head.appendChild(styleEl);
+    }
+    styleEl.textContent = generatedCss;
+  }, [iframeReady, generatedCss]);
+
   // Render content into iframe
   useEffect(() => {
     if (!iframeReady || !rootRef.current) return;

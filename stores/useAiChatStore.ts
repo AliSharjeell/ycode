@@ -173,7 +173,7 @@ type RuntimeEvent =
   | { type: 'tool_call'; id: string; name: string; input: Record<string, unknown> }
   | { type: 'tool_result'; id: string; name: string; ok: boolean }
   | { type: 'usage'; inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number; costUsd: number | null }
-  | { type: 'page_changed'; pageId: string; layerCount: number; layers: Layer[]; layersBefore?: Layer[] }
+  | { type: 'page_changed'; pageId: string; layerCount: number; layers: Layer[]; layersBefore?: Layer[]; generatedCss?: string }
   | { type: 'component_changed'; componentId: string; name: string; variants: ComponentVariant[] }
   | { type: 'done'; stopReason: string | null }
   | { type: 'error'; message: string };
@@ -1046,6 +1046,11 @@ function applyEvent(
         // the realtime broadcast already animated, so the snapshot won't replay.
         const addedIds = findAddedLayerIds(existingDraft.layers ?? [], event.layers);
         pagesStore.setDraftLayers(event.pageId, event.layers);
+        // Inject the freshly compiled stylesheet so the canvas shows the AI's
+        // colors/styles immediately instead of relying on the flaky Tailwind CDN.
+        if (event.generatedCss !== undefined) {
+          pagesStore.setDraftGeneratedCss(event.pageId, event.generatedCss);
+        }
         if (addedIds.length > 0) {
           useEditorStore.getState().markLayersEntering(addedIds);
         }
@@ -1058,6 +1063,9 @@ function applyEvent(
           await pagesStore.loadDraft(event.pageId);
           if (usePagesStore.getState().draftsByPageId[event.pageId]) {
             usePagesStore.getState().setDraftLayers(event.pageId, event.layers);
+            if (event.generatedCss !== undefined) {
+              usePagesStore.getState().setDraftGeneratedCss(event.pageId, event.generatedCss);
+            }
           }
         })();
       }

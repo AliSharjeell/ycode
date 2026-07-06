@@ -5,6 +5,7 @@ import { buildLoadToolsTool, deferredGroupOf, LOAD_TOOLS_NAME } from '@/lib/agen
 import { getAgentToolMap, getAgentTools } from '@/lib/agent/tools/registry';
 import { estimateCostUsd } from '@/lib/agent/models';
 import { getCachedLayers } from '@/lib/mcp/page-layers';
+import { generateCSSForPage } from '@/lib/server/cssGenerator';
 import { getComponentById } from '@/lib/repositories/componentRepository';
 
 import type { AgentToolGroup } from '@/lib/agent/tools/types';
@@ -56,7 +57,10 @@ export type RuntimeEvent =
   // build the Changes card or screenshot the right state. `layersBefore` is the
   // pre-turn tree (only sent when something changed) so the client can offer a
   // one-click Undo of the whole turn.
-  | { type: 'page_changed'; pageId: string; layerCount: number; layers: Layer[]; layersBefore?: Layer[] }
+  // `generatedCss` is the server-compiled Tailwind stylesheet for the page,
+  // sent so the editor canvas can inject it directly (the canvas's Tailwind CDN
+  // JIT is too flaky to reliably style large AI-built pages on its own).
+  | { type: 'page_changed'; pageId: string; layerCount: number; layers: Layer[]; layersBefore?: Layer[]; generatedCss?: string }
   // Authoritative post-turn snapshot of a component the agent edited, so the
   // client can sync its component drafts (the open canvas) without racing the
   // realtime broadcast, which ignores the acting user's own edits.
@@ -133,12 +137,24 @@ export async function* runAgent(options: RunAgentOptions): AsyncIterable<Runtime
         const after = await getCachedLayers(pageId);
         const before = beforeLayersByPage.get(pageId) ?? [];
         const layerCount = countChangedLayers(layerSignatures(before), layerSignatures(after));
+        // Compile the page's Tailwind CSS once per turn so the client canvas can
+        // inject the same stylesheet published pages use. This is what makes
+        // AI-built pages actually show their colors/styles on the canvas rather
+        // than relying on the flaky in-iframe Tailwind CDN JIT. Best-effort:
+        // never block the authoritative snapshot on a CSS failure.
+        let generatedCss: string | undefined;
+        try {
+          generatedCss = (await generateCSSForPage(pageId)) ?? undefined;
+        } catch (cssError) {
+          console.error('[ai-agent] failed to generate page CSS:', cssError);
+        }
         yield {
           type: 'page_changed',
           pageId,
           layerCount,
           layers: after,
           layersBefore: layerCount > 0 ? before : undefined,
+          generatedCss,
         };
       } catch (error) {
         console.error('[ai-agent] failed to compute page change snapshot:', error);

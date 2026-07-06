@@ -94,6 +94,7 @@ interface PagesActions {
   updatePageLocal: (pageId: string, updates: Partial<Page>) => void;
   removePage: (pageId: string) => void;
   setDraftLayers: (pageId: string, layers: Layer[]) => void;
+  setDraftGeneratedCss: (pageId: string, css: string) => void;
   copyLayer: (pageId: string, layerId: string) => Layer | null;
   copyLayers: (pageId: string, layerIds: string[]) => Layer[]; // New batch copy
   duplicateLayer: (pageId: string, layerId: string) => Layer | null;
@@ -1304,6 +1305,23 @@ export const usePagesStore = create<PagesStore>((set, get) => ({
       },
     });
 
+  },
+
+  // Store the server-compiled Tailwind CSS for a page so the editor canvas can
+  // inject it directly (mirroring the published page). This is the reliable
+  // source of truth for colors/styles on AI-built pages, where the canvas's
+  // Tailwind Browser CDN JIT is too flaky to compile large bulk inserts.
+  setDraftGeneratedCss: (pageId, css) => {
+    const { draftsByPageId } = get();
+    const draft = draftsByPageId[pageId];
+    if (!draft) return;
+    if (draft.generated_css === css) return;
+    set({
+      draftsByPageId: {
+        ...draftsByPageId,
+        [pageId]: { ...draft, generated_css: css },
+      },
+    });
   },
 
   copyLayer: (pageId, layerId) => {
