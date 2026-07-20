@@ -297,7 +297,7 @@ export default function ChatComposer({
     extensions: [
       StarterKit.configure({ heading: false }),
       Placeholder.configure({
-        placeholder: 'Ask AI to build, edit, or @mention a page, layer, component, or collection...',
+        placeholder: 'Ask Ycode...',
       }),
       LayerMentionWithView,
     ],

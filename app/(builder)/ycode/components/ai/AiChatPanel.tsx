@@ -24,14 +24,13 @@ import {
 import { Icon } from '@/components/ui/icon';
 import type { IconProps } from '@/components/ui/icon';
 import { Spinner } from '@/components/ui/spinner';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { AGENT_PROVIDERS, providerOfModel } from '@/lib/agent/models';
 import { getLayerName } from '@/lib/layer-display-utils';
 import { findLayerById } from '@/lib/layer-utils';
 import { cn } from '@/lib/utils';
 import { useAgentSettingsStore } from '@/stores/useAgentSettingsStore';
 import { useAiChatStore } from '@/stores/useAiChatStore';
-import type { ChatMessage, ChatMessagePart, ChatSession, ChatToolCall, ImageAttachment, Mention, SelectedLayerRef, SessionUsage, TurnChange } from '@/stores/useAiChatStore';
+import type { ChatMessage, ChatMessagePart, ChatSession, ChatToolCall, ImageAttachment, Mention, SelectedLayerRef, TurnChange } from '@/stores/useAiChatStore';
 import { useCollectionsStore } from '@/stores/useCollectionsStore';
 import { useComponentsStore } from '@/stores/useComponentsStore';
 import { useEditorStore } from '@/stores/useEditorStore';
@@ -43,12 +42,6 @@ import { toolCallLabel } from './ai-tool-labels';
 import ChatComposer from './ChatComposer';
 
 import type { AgentProviderId } from '@/lib/agent/models';
-
-const SUGGESTIONS = [
-  'Add a hero section with a headline and a call to action',
-  'Create a 3-column features section',
-  'Add a contact form at the bottom of this page',
-];
 
 const URL_REGEX = /\bhttps?:\/\/[^\s]+/gi;
 
@@ -233,7 +226,6 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
   const redoTurn = useAiChatStore((s) => s.redoTurn);
   const stop = useAiChatStore((s) => s.stop);
   const close = useAiChatStore((s) => s.close);
-  const sessionUsage = useAiChatStore((s) => s.sessionUsage);
   const chats = useAiChatStore((s) => s.chats);
   const currentChatId = useAiChatStore((s) => s.currentChatId);
   const newChat = useAiChatStore((s) => s.newChat);
@@ -353,6 +345,18 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
     });
   };
 
+  const composer = (
+    <ChatComposer
+      model={model}
+      onModelChange={setModel}
+      isStreaming={isStreaming}
+      onStop={stop}
+      onSubmit={submit}
+      mentionCandidates={mentionCandidates}
+      layerMentions={layerMentions}
+    />
+  );
+
   // No agent connected yet (or status still loading): show the connect
   // instructions instead of the chat. The API key lives in Settings → Agent.
   if (!agentStatus || !agentStatus.configured) {
@@ -409,7 +413,6 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
             onDelete={deleteChat}
           />
           <div className="flex items-center gap-1 shrink-0">
-            <SessionUsageBadge usage={sessionUsage} />
             <Button
               size="sm"
               onClick={newChat}
@@ -430,7 +433,6 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
             onDelete={deleteChat}
           />
           <div className="flex items-center gap-1 shrink-0">
-            <SessionUsageBadge usage={sessionUsage} />
             <Button
               size="sm"
               variant="secondary"
@@ -454,59 +456,60 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
         </div>
       )}
 
-      <div className="relative flex-1 min-h-0">
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          aria-live="polite"
-          aria-busy={isStreaming}
-          className="absolute inset-0 overflow-y-auto no-scrollbar px-4 py-4 flex flex-col gap-4"
-        >
-          {messages.length === 0 ? (
-            <EmptyState onPick={submit} disabled={isStreaming} />
-          ) : (
-            messages.map((message) => (
-              <MessageBubble
-                key={message.id} message={message}
-                isStreaming={isStreaming}
-                onRevert={revertTurn}
-                onRedo={redoTurn}
-              />
-            ))
-          )}
-
+      {messages.length === 0 ? (
+        <div className="flex-1 min-h-0 flex flex-col justify-start gap-4 p-3">
+          {composer}
           {error && (
             <div className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
               {error}
             </div>
           )}
         </div>
+      ) : (
+        <>
+          <div className="relative flex-1 min-h-0">
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              aria-live="polite"
+              aria-busy={isStreaming}
+              className="absolute inset-0 overflow-y-auto no-scrollbar px-4 py-4 flex flex-col gap-4"
+            >
+              {messages.map((message) => (
+                <MessageBubble
+                  key={message.id} message={message}
+                  isStreaming={isStreaming}
+                  onRevert={revertTurn}
+                  onRedo={redoTurn}
+                />
+              ))}
 
-        {showJumpToLatest && (
-          <Button
-            size="sm"
-            variant="secondary"
-            className="absolute bottom-3 left-1/2 size-8 -translate-x-1/2 rounded-full border p-0 shadow-md"
-            onClick={scrollToBottom}
-            aria-label="Jump to latest message"
-            title="Jump to latest"
-          >
-            <Icon name="chevronDown" className="size-4" />
-          </Button>
-        )}
-      </div>
+              {error && (
+                <div className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+                  {error}
+                </div>
+              )}
+            </div>
 
-      <div className="border-t p-3 shrink-0">
-        <ChatComposer
-          model={model}
-          onModelChange={setModel}
-          isStreaming={isStreaming}
-          onStop={stop}
-          onSubmit={submit}
-          mentionCandidates={mentionCandidates}
-          layerMentions={layerMentions}
-        />
-      </div>
+            {showJumpToLatest && (
+              <Button
+                size="sm"
+                variant="secondary"
+                className="absolute bottom-3 left-1/2 size-8 -translate-x-1/2 rounded-full border p-0 shadow-md"
+                onClick={scrollToBottom}
+                aria-label="Jump to latest message"
+                title="Jump to latest"
+              >
+                <Icon name="chevronDown" className="size-4" />
+              </Button>
+            )}
+          </div>
+
+          <div className="border-t p-3 shrink-0">
+            {composer}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -518,66 +521,6 @@ function MarkdownText({ text }: { text: string }) {
       className="text-xs leading-relaxed break-words [&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_ul]:my-1.5 [&_ul]:ml-4 [&_ul]:list-disc [&_ol]:my-1.5 [&_ol]:ml-4 [&_ol]:list-decimal [&_li]:my-0.5 [&_h1]:mt-2 [&_h1]:mb-1 [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h2]:text-xs [&_h2]:font-semibold [&_h3]:font-semibold [&_a]:underline [&_a]:underline-offset-2 [&_strong]:font-semibold [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[11px] [&_pre]:my-1.5 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-muted [&_pre]:p-2 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-2 [&_blockquote]:pl-2 [&_blockquote]:text-muted-foreground"
       dangerouslySetInnerHTML={{ __html: html }}
     />
-  );
-}
-
-/** Compact token count, e.g. 950 → "950", 12_300 → "12.3k", 2_100_000 → "2.1M". */
-function formatTokens(count: number): string {
-  if (count < 1000) return String(count);
-  if (count < 1_000_000) {
-    const k = count / 1000;
-    return `${k < 10 ? k.toFixed(1) : Math.round(k)}k`;
-  }
-  const m = count / 1_000_000;
-  return `${m < 10 ? m.toFixed(1) : Math.round(m)}M`;
-}
-
-/** Approximate USD amount, e.g. 0.0034 → "<$0.01", 0.42 → "$0.42", 12.5 → "$12.50". */
-function formatCost(costUsd: number): string {
-  if (costUsd > 0 && costUsd < 0.01) return '<$0.01';
-  return `$${costUsd.toFixed(2)}`;
-}
-
-/** Running token total and approximate cost for the active session, with a per-category tooltip. */
-function SessionUsageBadge({ usage }: { usage: SessionUsage }) {
-  const total =
-    usage.inputTokens + usage.outputTokens + usage.cacheWriteTokens + usage.cacheReadTokens;
-  if (total === 0) return null;
-
-  const rows: Array<[string, number]> = [
-    ['Input', usage.inputTokens],
-    ['Output', usage.outputTokens],
-    ['Cache write', usage.cacheWriteTokens],
-    ['Cache read', usage.cacheReadTokens],
-  ];
-
-  return (
-    <Tooltip>
-      <TooltipTrigger className="flex items-center gap-1 px-1.5 text-[11px] tabular-nums text-muted-foreground">
-        <Icon name="sparkles" className="size-3" />
-        {formatTokens(total)}
-        {usage.costUsd !== null && (
-          <span>· {formatCost(usage.costUsd)}</span>
-        )}
-      </TooltipTrigger>
-      <TooltipContent className="tabular-nums">
-        <p className="mb-1 font-medium">Session tokens</p>
-        <div className="flex flex-col gap-0.5">
-          {rows.map(([label, value]) => (
-            <div key={label} className="flex justify-between gap-4">
-              <span className="text-background/70">{label}</span>
-              <span>{value.toLocaleString()}</span>
-            </div>
-          ))}
-          {usage.costUsd !== null && (
-            <div className="flex justify-between gap-4 border-t border-background/20 mt-0.5 pt-0.5">
-              <span className="text-background/70">Est. cost</span>
-              <span>{formatCost(usage.costUsd)}</span>
-            </div>
-          )}
-        </div>
-      </TooltipContent>
-    </Tooltip>
   );
 }
 
@@ -738,29 +681,6 @@ function ConnectAgentState() {
         )}
       </Dialog>
     </>
-  );
-}
-
-function EmptyState({ onPick, disabled }: { onPick: (text: string) => void; disabled: boolean }) {
-  return (
-    <div className="flex-1 flex flex-col justify-center gap-3">
-      <p className="text-xs text-muted-foreground text-center">
-        Describe what you want to build. The AI can create sections, edit elements, manage content, and more.
-      </p>
-      <div className="flex flex-col gap-2">
-        {SUGGESTIONS.map((suggestion) => (
-          <button
-            key={suggestion}
-            type="button"
-            disabled={disabled}
-            onClick={() => onPick(suggestion)}
-            className="text-left text-xs rounded-lg border bg-muted/40 hover:bg-muted px-3 py-2 transition-colors disabled:opacity-50"
-          >
-            {suggestion}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 

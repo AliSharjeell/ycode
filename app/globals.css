@@ -260,7 +260,7 @@
 
 .ai-chat-composer.ProseMirror p.is-editor-empty:first-child::before {
   content: attr(data-placeholder);
-  @apply text-muted-foreground pointer-events-none float-left h-0;
+  @apply text-muted-foreground/50 pointer-events-none float-left h-0;
 }
 
 /* RichTextEditor Styles */
