@@ -97,6 +97,16 @@ export const pagesApi = {
   save: (pages: Page[]) => ipc<{ ok: true } | { ok: false; error: string }>('project:writeData', 'pages', pages),
 };
 
+// Legacy alias used by the editor's PagesTree.
+export const foldersApi = {
+  list: async (): Promise<any[]> => (await ipc<unknown>('project:readData', 'page-folders')) as any[],
+  save: (folders: any[]) =>
+    ipc<{ ok: true } | { ok: false; error: string }>('project:writeData', 'page-folders', folders),
+};
+
+// Legacy alias used by useGlobalsStore.
+export const globalVariablesApi = globalsApi;
+
 export const pageLayersApi = {
   get: async (pageId: string): Promise<PageLayers> => {
     if (!isElectron()) return { id: pageId, page_id: pageId, layers: [], is_published: false };

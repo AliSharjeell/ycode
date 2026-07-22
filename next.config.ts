@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next';
+import * as path from 'node:path';
 
 const nextConfig: NextConfig = {
   output: 'export',
@@ -7,8 +8,20 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
   reactStrictMode: true,
-  // The desktop app does not need @vercel/functions, serverExternalPackages,
-  // or any of the database driver stubs.
+  webpack: (config) => {
+    config.resolve = config.resolve || {};
+    config.resolve.alias = {
+      ...(config.resolve.alias || {}),
+      // @vercel/functions was uninstalled; alias to a local no-op shim.
+      '@vercel/functions': path.resolve(__dirname, 'lib/vercel-functions-shim.ts'),
+    };
+    return config;
+  },
+  turbopack: {
+    resolveAlias: {
+      '@vercel/functions': path.resolve(__dirname, 'lib/vercel-functions-shim.ts'),
+    },
+  },
 };
 
 export default nextConfig;
