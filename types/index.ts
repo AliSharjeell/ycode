@@ -1854,6 +1854,32 @@ export interface PublishTableStats {
   deleted: number;
 }
 
+/**
+ * AI builder chat history, stored server-side so conversations are shared
+ * across the team and survive browser data clearing.
+ *
+ * `messages` is the stripped transcript (text, tool calls, parts, mentions —
+ * no image data or revert checkpoints). Its canonical shape is `ChatMessage`
+ * in `stores/useAiChatStore.ts`; the server persists it as opaque JSON and
+ * never inspects individual entries, hence `unknown[]`.
+ */
+export interface AiChatSummary {
+  id: string;
+  title: string;
+  updated_at: string;
+}
+
+export interface AiChat extends AiChatSummary {
+  messages: unknown[];
+  created_at: string;
+}
+
+export interface UpsertAiChatData {
+  id: string;
+  title: string;
+  messages: unknown[];
+}
+
 /** Aggregated publishing statistics returned by the publish API */
 export interface PublishStats {
   totalDurationMs: number;

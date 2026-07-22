@@ -307,6 +307,9 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
   const close = useAiChatStore((s) => s.close);
   const chats = useAiChatStore((s) => s.chats);
   const currentChatId = useAiChatStore((s) => s.currentChatId);
+  const isLoadingChats = useAiChatStore((s) => s.isLoadingChats);
+  const loadingChatId = useAiChatStore((s) => s.loadingChatId);
+  const loadChats = useAiChatStore((s) => s.loadChats);
   const newChat = useAiChatStore((s) => s.newChat);
   const loadChat = useAiChatStore((s) => s.loadChat);
   const deleteChat = useAiChatStore((s) => s.deleteChat);
@@ -391,6 +394,12 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
     void loadAgentStatus();
   }, [loadAgentStatus]);
 
+  // Fetch the server-side chat history (summaries only) when the panel opens;
+  // the store de-dupes so this runs at most once per browser session.
+  useEffect(() => {
+    void loadChats();
+  }, [loadChats]);
+
   // A previously chosen model may have been disabled in Settings → Agent since,
   // or its provider's API key removed; snap the picker back to the configured
   // default so the request isn't silently remapped server-side.
@@ -434,6 +443,23 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
       mentionCandidates={mentionCandidates}
       layerMentions={layerMentions}
     />
+  );
+
+  // What to show when the active chat has no messages: a spinner while a
+  // history chat's transcript is being fetched, otherwise the fresh-chat view.
+  const emptyState = loadingChatId === currentChatId ? (
+    <div className="flex-1 flex items-center justify-center">
+      <Spinner />
+    </div>
+  ) : (
+    <div className="flex-1 min-h-0 flex flex-col justify-start gap-4 p-3">
+      {composer}
+      {error && (
+        <div className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
+          {error}
+        </div>
+      )}
+    </div>
   );
 
   // No agent connected yet (or status still loading): show the connect
@@ -488,6 +514,7 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
           <ChatHistoryMenu
             chats={chats}
             currentChatId={currentChatId}
+            isLoading={isLoadingChats}
             onSelect={loadChat}
             onDelete={deleteChat}
           />
@@ -508,6 +535,7 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
           <ChatHistoryMenu
             chats={chats}
             currentChatId={currentChatId}
+            isLoading={isLoadingChats}
             onSelect={loadChat}
             onDelete={deleteChat}
           />
@@ -536,14 +564,7 @@ export default function AiChatPanel({ embedded = false }: AiChatPanelProps) {
       )}
 
       {messages.length === 0 ? (
-        <div className="flex-1 min-h-0 flex flex-col justify-start gap-4 p-3">
-          {composer}
-          {error && (
-            <div className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">
-              {error}
-            </div>
-          )}
-        </div>
+        emptyState
       ) : (
         <>
           <div className="relative flex-1 min-h-0">
@@ -623,11 +644,13 @@ function compactTime(timestamp: number): string {
 function ChatHistoryMenu({
   chats,
   currentChatId,
+  isLoading,
   onSelect,
   onDelete,
 }: {
   chats: ChatSession[];
   currentChatId: string;
+  isLoading: boolean;
   onSelect: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -646,9 +669,15 @@ function ChatHistoryMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-56">
-        {chats.length === 0 ? (
+        {chats.length === 0 && isLoading && (
+          <div className="flex items-center justify-center px-2 py-3">
+            <Spinner />
+          </div>
+        )}
+        {chats.length === 0 && !isLoading && (
           <div className="px-2 py-1.5 text-xs text-muted-foreground">No previous chats</div>
-        ) : (
+        )}
+        {chats.length > 0 && (
           chats.map((chat) => (
             <DropdownMenuItem
               key={chat.id}

@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 
 import { DEFAULT_AGENT_MODEL, reviewModelFor } from '@/lib/agent/models';
+import { aiChatsApi } from '@/lib/api';
 import { syncLayerAssets } from '@/lib/canvas-asset-sync';
 import { findAddedLayerIds } from '@/lib/layer-utils';
 import { useComponentsStore } from '@/stores/useComponentsStore';
@@ -92,7 +93,12 @@ export interface ChatSession {
   id: string;
   /** Derived from the first user message; shown in the history list. */
   title: string;
-  messages: ChatMessage[];
+  /**
+   * Full transcript. Absent for sessions known only from the server's summary
+   * list — the transcript is fetched lazily when the chat is opened, then
+   * cached here for the rest of the browser session.
+   */
+  messages?: ChatMessage[];
   /** Last activity, used for ordering and the relative-time label. */
   updatedAt: number;
 }
@@ -105,6 +111,12 @@ interface AiChatState {
   currentChatId: string;
   /** Saved conversations (including the active one once it has messages). */
   chats: ChatSession[];
+  /** True once the server-side history list has been fetched this session. */
+  chatsLoaded: boolean;
+  /** True while the history list is being fetched (panel shows a spinner). */
+  isLoadingChats: boolean;
+  /** Chat id whose transcript is currently being fetched, if any. */
+  loadingChatId: string | null;
   status: ChatStatus;
   error: string | null;
   /** Cumulative token usage for the active session, shown in the panel header. */
@@ -155,10 +167,13 @@ interface AiChatActions {
   close: () => void;
   toggle: () => void;
   clear: () => void;
+  /** Fetch the server-side history list (summaries only) once per session. */
+  loadChats: () => Promise<void>;
   /** Save the active chat to history and start a fresh, empty conversation. */
   newChat: () => void;
-  /** Save the active chat, then load a previous conversation by id. */
-  loadChat: (id: string) => void;
+  /** Save the active chat, then load a previous conversation by id (fetching
+   * its transcript from the server when it isn't cached in memory). */
+  loadChat: (id: string) => Promise<void>;
   /** Remove a conversation from history (starts fresh if it was active). */
   deleteChat: (id: string) => void;
   stop: () => void;
@@ -386,13 +401,24 @@ function resolveReviewPageId(pinnedPageId: string | null): string | null {
   return null;
 }
 
+/** Generate a v4 UUID. Chat ids are the `ai_chats` primary key (uuid column),
+ * so the fallback must also produce real UUIDs — `crypto.randomUUID` is only
+ * available in secure contexts, and self-hosted builders are sometimes reached
+ * over plain http. */
 function newId(): string {
-  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-/** Keep only durable message fields for localStorage (drops image data, etc.). */
+/** Keep only durable message fields for server persistence (drops image data,
+ * revert checkpoints, and other ephemeral per-session state). */
 function stripMessageForStorage(message: ChatMessage): ChatMessage {
   return {
     id: message.id,
@@ -626,11 +652,38 @@ export const useAiChatStore = create<AiChatStore>()(
         }
       };
 
+      /**
+       * Save the active conversation to the server (fire-and-forget from
+       * callers). Runs once per completed turn / stop — never during
+       * streaming — so chat persistence adds no overhead to the token stream.
+       * A failed save must never block or crash a turn, so errors only log.
+       */
+      const persistActiveChat = async (): Promise<void> => {
+        const { currentChatId, messages } = get();
+        // Empty chats never create rows (mirrors commitActiveChat dropping them).
+        if (messages.length === 0) return;
+
+        try {
+          const result = await aiChatsApi.upsert(currentChatId, {
+            title: deriveChatTitle(messages),
+            messages: messages.map(stripMessageForStorage),
+          });
+          if (result.error) {
+            console.error('Failed to save AI chat:', result.error);
+          }
+        } catch (error) {
+          console.error('Failed to save AI chat:', error);
+        }
+      };
+
       return {
         isOpen: false,
         messages: [],
         currentChatId: newId(),
         chats: [],
+        chatsLoaded: false,
+        isLoadingChats: false,
+        loadingChatId: null,
         status: 'idle',
         error: null,
         sessionUsage: EMPTY_USAGE,
@@ -650,6 +703,71 @@ export const useAiChatStore = create<AiChatStore>()(
           set({ messages: [], error: null, sessionUsage: EMPTY_USAGE });
         },
 
+        loadChats: async () => {
+          const state = get();
+          if (state.chatsLoaded || state.isLoadingChats) return;
+          set({ isLoadingChats: true });
+
+          // Restore the active conversation after a reload: the id survives in
+          // localStorage but the transcript now lives server-side. Fetched in
+          // parallel with the summaries list to avoid a second sequential
+          // round-trip; a 404 (fresh chat that never hit the server) is a cheap
+          // indexed miss and simply resolves to nothing to restore.
+          const shouldRestoreActive = state.messages.length === 0 && state.status === 'idle';
+          const restorePromise = shouldRestoreActive
+            ? aiChatsApi.getById(state.currentChatId).catch(() => null)
+            : null;
+
+          try {
+            const result = await aiChatsApi.getAll();
+            if (result.error || !result.data) {
+              // Leave chatsLoaded false so the next panel open retries.
+              console.error('Failed to load AI chats:', result.error ?? 'No data');
+              return;
+            }
+            const summaries = result.data;
+            const summaryIds = new Set(summaries.map((summary) => summary.id));
+
+            set((s) => {
+              // In-memory sessions win: they may hold transcripts (and turns)
+              // newer than the server list. Server summaries fill in the rest.
+              const localById = new Map(s.chats.map((chat) => [chat.id, chat]));
+              const fromServer = summaries.map(
+                (summary) =>
+                  localById.get(summary.id) ?? {
+                    id: summary.id,
+                    title: summary.title,
+                    updatedAt: new Date(summary.updated_at).getTime(),
+                  },
+              );
+              const localOnly = s.chats.filter((chat) => !summaryIds.has(chat.id));
+              const chats = [...localOnly, ...fromServer].sort((a, b) => b.updatedAt - a.updatedAt);
+              return { chats, chatsLoaded: true };
+            });
+
+            if (restorePromise) {
+              const activeId = state.currentChatId;
+              const chat = await restorePromise;
+              const restored = (chat?.data?.messages ?? []) as ChatMessage[];
+              if (restored.length > 0) {
+                set((s) =>
+                  // Re-check nothing changed while the transcript was in flight.
+                  s.currentChatId === activeId && s.messages.length === 0
+                    ? {
+                      messages: restored,
+                      chats: s.chats.map((c) => (c.id === activeId ? { ...c, messages: restored } : c)),
+                    }
+                    : {},
+                );
+              }
+            }
+          } catch (error) {
+            console.error('Failed to load AI chats:', error);
+          } finally {
+            set({ isLoadingChats: false });
+          }
+        },
+
         newChat: () => {
           get().stop();
           turnCheckpoints.clear();
@@ -662,16 +780,52 @@ export const useAiChatStore = create<AiChatStore>()(
           }));
         },
 
-        loadChat: (id: string) => {
+        loadChat: async (id: string) => {
           if (id === get().currentChatId) return;
           get().stop();
           turnCheckpoints.clear();
-          set((state) => {
-            const chats = commitActiveChat(state);
-            const target = chats.find((chat) => chat.id === id);
-            if (!target) return { chats };
-            return { chats, currentChatId: id, messages: target.messages, error: null, sessionUsage: EMPTY_USAGE };
-          });
+
+          const chats = commitActiveChat(get());
+          const target = chats.find((chat) => chat.id === id);
+          if (!target) {
+            set({ chats });
+            return;
+          }
+
+          // Cached in memory (opened earlier this session, or authored here).
+          if (target.messages) {
+            set({ chats, currentChatId: id, messages: target.messages, error: null, sessionUsage: EMPTY_USAGE });
+            return;
+          }
+
+          // Known only from the server summary — switch immediately and stream
+          // the transcript in (the panel shows a loading state meanwhile).
+          set({ chats, currentChatId: id, messages: [], error: null, sessionUsage: EMPTY_USAGE, loadingChatId: id });
+          try {
+            const result = await aiChatsApi.getById(id);
+            if (result.error || !result.data) {
+              set((s) => (s.currentChatId === id ? { error: result.error ?? 'Failed to load chat' } : {}));
+              return;
+            }
+            const restored = result.data.messages as ChatMessage[];
+            set((s) =>
+              // The user may have switched away (or started typing into another
+              // chat) while the transcript was loading — don't clobber that.
+              s.currentChatId === id
+                ? {
+                  messages: restored,
+                  chats: s.chats.map((c) => (c.id === id ? { ...c, messages: restored } : c)),
+                }
+                : {
+                  chats: s.chats.map((c) => (c.id === id ? { ...c, messages: restored } : c)),
+                },
+            );
+          } catch (error) {
+            console.error('Failed to load AI chat:', error);
+            set((s) => (s.currentChatId === id ? { error: 'Failed to load chat' } : {}));
+          } finally {
+            set((s) => (s.loadingChatId === id ? { loadingChatId: null } : {}));
+          }
         },
 
         deleteChat: (id: string) => {
@@ -681,6 +835,11 @@ export const useAiChatStore = create<AiChatStore>()(
             get().stop();
             turnCheckpoints.clear();
             return { chats, currentChatId: newId(), messages: [], error: null, sessionUsage: EMPTY_USAGE };
+          });
+          // Optimistic: the row is gone locally either way; a failed server
+          // delete just means it reappears on the next full reload.
+          void aiChatsApi.delete(id).catch((error) => {
+            console.error('Failed to delete AI chat:', error);
           });
         },
 
@@ -748,13 +907,16 @@ export const useAiChatStore = create<AiChatStore>()(
             // Fold the just-updated messages into the history list so the chat
             // dropdown shows an up-to-date title and timestamp.
             set((state) => ({ status: 'idle', chats: commitActiveChat(state) }));
+            // Save the conversation server-side once per turn — this also runs
+            // after Stop (the abort unwinds runTurn), so partial turns persist.
+            void persistActiveChat();
           }
         },
       };
     },
     {
       name: 'ycode-ai-chat',
-      version: 3,
+      version: 4,
       // v2 dropped the "Default" picker option in favour of an explicit model.
       // Map the legacy `null` (= "use server default") onto the current default;
       // leave any explicit model choice untouched.
@@ -762,6 +924,9 @@ export const useAiChatStore = create<AiChatStore>()(
       // is almost always the old default rather than a deliberate pick (Opus was
       // preselected for everyone), so remap it once; anyone who really wants
       // Opus can re-select it from the dropdown.
+      // v4 moved conversations to the database (ai_chats table). Drop the
+      // legacy locally-persisted transcripts — including currentChatId, whose
+      // pre-v4 value may not be a valid UUID for the new primary key.
       migrate: (persisted, fromVersion) => {
         let state = (persisted ?? {}) as Partial<AiChatState>;
         if (fromVersion < 2 && (state.model === null || state.model === undefined)) {
@@ -770,6 +935,12 @@ export const useAiChatStore = create<AiChatStore>()(
         if (fromVersion < 3 && state.model === 'claude-opus-4-8') {
           state = { ...state, model: DEFAULT_AGENT_MODEL };
         }
+        if (fromVersion < 4) {
+          state = { ...state };
+          delete state.messages;
+          delete state.chats;
+          delete state.currentChatId;
+        }
         return state;
       },
       storage: createJSONStorage(() =>
@@ -777,43 +948,18 @@ export const useAiChatStore = create<AiChatStore>()(
           ? window.localStorage
           : { getItem: () => null, setItem: () => undefined, removeItem: () => undefined },
       ),
-      // After reload, make sure the restored active conversation is represented in
-      // the history list (also upgrades the legacy single-conversation format).
-      onRehydrateStorage: () => (state) => {
-        if (!state) return;
-        if (state.messages.length > 0 && !state.chats.some((chat) => chat.id === state.currentChatId)) {
-          state.chats = commitActiveChat(state);
-        }
-      },
-      // Persist only the durable, lightweight bits. Image data and per-turn revert
-      // checkpoints are intentionally dropped to stay under localStorage quota.
+      // Persist only UI preferences plus the active chat id (so a reload can
+      // restore the conversation from the server). Transcripts live in the
+      // ai_chats table — team-visible and wiped by a project reset.
       partialize: (state) => ({
         isOpen: state.isOpen,
         autoReview: state.autoReview,
         model: state.model,
         currentChatId: state.currentChatId,
-        messages: state.messages.map(stripMessageForStorage),
-        chats: state.chats.map((chat) => ({
-          id: chat.id,
-          title: chat.title,
-          updatedAt: chat.updatedAt,
-          messages: chat.messages.map(stripMessageForStorage),
-        })),
       }),
     },
   ),
 );
-
-/**
- * Wipe the persisted AI chat history from localStorage. Used by the project
- * reset flow: the server reset only drops database tables, but conversations
- * live client-side, so they must be cleared explicitly or they resurface after
- * the reset. Callers are expected to hard-reload right after, so the in-memory
- * state doesn't need resetting here.
- */
-export function clearPersistedAiChats(): void {
-  useAiChatStore.persist.clearStorage();
-}
 
 /**
  * Append streamed text to the ordered parts list, merging into the trailing

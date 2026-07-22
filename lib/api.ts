@@ -4,7 +4,7 @@
  * Handles communication with Next.js API routes
  */
 
-import type { Page, PageLayers, Layer, Asset, AssetCategory, PageFolder, ApiResponse, AgentProviderId, AgentSettingsStatus, Collection, CollectionField, CollectionItemWithValues, Component, LayerStyle, Setting, UpdateAgentSettingsData, UpdateCollectionData, CreateCollectionFieldData, UpdateCollectionFieldData, Locale, Translation, CreateLocaleData, UpdateLocaleData, CreateTranslationData, UpdateTranslationData, AssetFolder, Font } from '../types';
+import type { Page, PageLayers, Layer, Asset, AssetCategory, PageFolder, ApiResponse, AgentProviderId, AgentSettingsStatus, AiChat, AiChatSummary, Collection, CollectionField, CollectionItemWithValues, Component, LayerStyle, Setting, UpdateAgentSettingsData, UpdateCollectionData, CreateCollectionFieldData, UpdateCollectionFieldData, Locale, Translation, CreateLocaleData, UpdateLocaleData, CreateTranslationData, UpdateTranslationData, AssetFolder, Font } from '../types';
 import type { StatusAction } from '@/lib/collection-field-utils';
 import type { CollectionUsageResult, CollectionFieldUsageResult } from '@/lib/collection-usage-utils';
 
@@ -843,6 +843,35 @@ export const agentSettingsApi = {
     return apiRequest<{ success: boolean }>('/ycode/api/settings/agent/test', {
       method: 'POST',
       body: JSON.stringify(apiKey ? { provider, apiKey } : { provider }),
+    });
+  },
+};
+
+// AI Chats API - server-side AI builder conversation history
+export const aiChatsApi = {
+  /** List all saved chats as lightweight summaries (no transcripts). */
+  async getAll(): Promise<ApiResponse<AiChatSummary[]>> {
+    return apiRequest<AiChatSummary[]>('/ycode/api/ai/chats');
+  },
+
+  /** Get one chat including its full transcript. */
+  async getById(id: string): Promise<ApiResponse<AiChat>> {
+    return apiRequest<AiChat>(`/ycode/api/ai/chats/${id}`);
+  },
+
+  /** Create or update a chat, replacing its whole transcript. The response is
+   * a bare acknowledgment — the row is not echoed back. */
+  async upsert(id: string, data: { title: string; messages: unknown[] }): Promise<ApiResponse<{ success: boolean }>> {
+    return apiRequest<{ success: boolean }>(`/ycode/api/ai/chats/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  /** Remove a chat from history. */
+  async delete(id: string): Promise<ApiResponse<{ success: boolean }>> {
+    return apiRequest<{ success: boolean }>(`/ycode/api/ai/chats/${id}`, {
+      method: 'DELETE',
     });
   },
 };
