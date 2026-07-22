@@ -1,12 +1,5 @@
 'use client';
 
-/**
- * Welcome screen — shown when no project is open.
- *
- * Three actions: Open a project folder, Create a new project, or pick
- * a recent project. The list of recent projects is loaded from the main
- * process.
- */
 import React from 'react';
 import { useProjectStore } from '@/stores/useProjectStore';
 import { Button } from '@/components/ui/button';
@@ -27,7 +20,7 @@ export function ProjectPicker(): React.ReactElement {
         </p>
 
         <div className="flex gap-3">
-          <Button onClick={() => project.open()}>Open Project…</Button>
+          <Button onClick={() => project.open()} data-testid="open-project">Open Project…</Button>
           <Button onClick={() => project.create()} variant="outline">
             Create New Project…
           </Button>

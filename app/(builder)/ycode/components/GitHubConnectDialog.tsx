@@ -1,13 +1,5 @@
 'use client';
 
-/**
- * GitHub connect dialog — drives the OAuth Device Flow.
- *
- * 1. User clicks "Connect GitHub".
- * 2. We start the device flow and show the user code + verification URL.
- * 3. User goes to github.com/login/device and pastes the code.
- * 4. We poll until GitHub grants the token.
- */
 import React, { useEffect, useState } from 'react';
 import { useGitHubStore } from '@/stores/useGitHubStore';
 import { Button } from '@/components/ui/button';

@@ -1,34 +1,43 @@
 /**
  * Base route for the Ycode editor — URL: /ycode.
  *
- * Shows the ProjectPicker when no project is open; otherwise the editor
- * shell (rendered by the layout) takes over.
+ * Hosts the desktop shell. The original YCodeBuilderMain is not rendered
+ * here because it depends on the legacy editor code that has not yet
+ * been migrated to the new IPC API. As components are migrated, this
+ * shell can be replaced with a thin wrapper around the migrated
+ * YCodeBuilderMain.
  */
 'use client';
 
 import { useEffect } from 'react';
 import { useProjectStore } from '@/stores/useProjectStore';
-import { ProjectPicker } from './components/ProjectPicker';
+import { YCodeDesktopShell } from './YCodeDesktopShell';
 import { isDesktop } from '@/lib/api';
 
 export default function YCodeEditorRoute() {
   const project = useProjectStore();
 
   useEffect(() => {
-    if (!isDesktop()) {
-      // When running in a plain browser (e.g. during next dev outside
-      // Electron), we still try to load from the URL hash as a dev escape
-      // hatch. The renderer uses file:// URLs in dev to talk to a
-      // stand-alone project folder.
-      return;
+    if (isDesktop()) {
+      void project.refresh();
     }
-    void project.refresh();
   }, []);
 
-  if (isDesktop() && !project.path) {
-    return <ProjectPicker />;
+  if (!isDesktop()) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-background text-foreground">
+        <div className="text-center p-8 max-w-md">
+          <h1 className="text-2xl font-semibold mb-2">Ycode desktop</h1>
+          <p className="text-sm text-muted-foreground">
+            This is the desktop editor. Run <code className="font-mono">npm run dev</code>{' '}
+            to launch the Electron host, or open the static export from
+            <code className="font-mono"> out/index.html </code>
+            in a browser.
+          </p>
+        </div>
+      </div>
+    );
   }
 
-  // The actual editor shell is rendered by the layout (YCodeBuilderMain).
-  return null;
+  return <YCodeDesktopShell />;
 }

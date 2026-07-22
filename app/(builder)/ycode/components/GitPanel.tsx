@@ -1,16 +1,10 @@
 'use client';
 
-/**
- * Git panel — shows status, log, branch, and commit dialog.
- *
- * Lives in the editor's right sidebar. Tabs: Status, History, Branches.
- */
 import React, { useEffect, useState } from 'react';
 import { useGitStore } from '@/stores/useGitStore';
 import { useGitHubStore } from '@/stores/useGitHubStore';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import Icon from '@/components/ui/icon';
 
 type Tab = 'status' | 'history' | 'branches';
 
@@ -69,7 +63,6 @@ export function GitPanel(): React.ReactElement {
           This project is not a git repository yet.
         </div>
         <Button onClick={() => git.init()} variant="default">
-          <Icon name="git-branch" className="mr-2 h-4 w-4" />
           Initialize as Git Repository
         </Button>
       </div>
@@ -237,7 +230,6 @@ function StatusBadge({ type }: { type: string }): React.ReactElement {
 
 function RemotesSection(): React.ReactElement {
   const git = useGitStore();
-  const github = useGitHubStore();
   const [newRemote, setNewRemote] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -271,11 +263,6 @@ function RemotesSection(): React.ReactElement {
           Add
         </Button>
       </div>
-      {!github.connected && (
-        <div className="text-xs text-muted-foreground">
-          Connect GitHub to enable push/pull without a token.
-        </div>
-      )}
     </div>
   );
 }

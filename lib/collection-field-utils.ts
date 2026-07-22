@@ -27,6 +27,30 @@ export const getCollectionFields = (): any[] => [];
 export const getCollectionFieldByKey = (): any | null => null;
 export const getCollectionFieldById = (): any | null => null;
 
+// Field-type unions and constants.
+export const IMAGE_FIELD_TYPES: any[] = [];
+export const VIDEO_FIELD_TYPES: any[] = [];
+export const AUDIO_FIELD_TYPES: any[] = [];
+export const COLOR_FIELD_TYPES: any[] = [];
+export const SIMPLE_TEXT_FIELD_TYPES: any[] = [];
+export const RICH_TEXT_FIELD_TYPES: any[] = [];
+
+// Field group/filter utilities.
+export type FieldGroup = any;
+export type FieldSourceType = any;
+export const filterFieldGroupsByType = (_groups: any, _type: any): any[] => [];
+export const flattenFieldGroups = (_groups: any): any[] => [];
+export const buildFieldGroupsForLayer = (_layer: any, _ctx: any): any[] => [];
+export const buildMultiAssetVirtualFields = (_fields: any): any[] => [];
+export const isVirtualAssetField = (_field: any): boolean => false;
+
+export const FieldSelectDropdown = (_props: any): any => null;
+export const FieldGroup = (_props: any): any => null;
+
+// Variable helpers.
+export const parseValueToContent = (_value: any, _opts?: any): any => null;
+export const getVariableLabel = (_variable: any): string => '';
+
 // Type-only exports preserved so TS imports compile.
 export type CollectionFieldType = any;
 export type CollectionField = any;
