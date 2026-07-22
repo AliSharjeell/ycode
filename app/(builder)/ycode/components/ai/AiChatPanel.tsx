@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 
 import DOMPurify from 'dompurify';
@@ -207,6 +207,83 @@ function MessageTextWithMentions({ text, mentions }: { text: string; mentions?: 
   }
   if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
   return <>{nodes}</>;
+}
+
+/** Collapsed user-bubble height (px). Messages taller than this get clamped
+ * behind a "Show more" affordance so long prompts don't dominate the transcript. */
+const USER_MESSAGE_COLLAPSED_MAX_HEIGHT = 128;
+/** Expanded user-bubble height cap (px) — the full text scrolls within the
+ * bubble instead of stretching it to thousands of pixels. */
+const USER_MESSAGE_EXPANDED_MAX_HEIGHT = 320;
+
+/**
+ * User message bubble that clamps long prompts. Short messages render as-is;
+ * long ones collapse to a preview that fades out at the bottom — clicking the
+ * faded bubble expands it. Even expanded, the text scrolls inside a
+ * capped-height bubble, with a subtle chevron to collapse it again.
+ */
+function CollapsibleUserMessage({ children }: { children: ReactNode }) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isClamped, setIsClamped] = useState(false);
+
+  // Measure after render: only messages that actually overflow the collapsed
+  // height get the toggle. Sent messages never change, so one measure is enough.
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    setIsClamped(el.scrollHeight > USER_MESSAGE_COLLAPSED_MAX_HEIGHT + 8);
+  }, []);
+
+  return (
+    <div className="relative rounded-xl rounded-br-sm bg-secondary border border-border text-current overflow-hidden">
+      <div
+        ref={contentRef}
+        className={cn(
+          'px-3 py-2 text-xs whitespace-pre-wrap break-words',
+          isClamped && !isExpanded && 'overflow-hidden',
+          isClamped && isExpanded && 'overflow-y-auto no-scrollbar',
+        )}
+        style={
+          isClamped
+            ? {
+              maxHeight: isExpanded ? USER_MESSAGE_EXPANDED_MAX_HEIGHT : USER_MESSAGE_COLLAPSED_MAX_HEIGHT,
+              // Fade the text itself out at the bottom (the card background
+              // stays untouched) — the overlay button is just a click target.
+              ...(!isExpanded && {
+                maskImage: 'linear-gradient(to bottom, black 55%, transparent 95%)',
+                WebkitMaskImage: 'linear-gradient(to bottom, black 55%, transparent 95%)',
+              }),
+            }
+            : undefined
+        }
+      >
+        {children}
+      </div>
+      {isClamped && !isExpanded && (
+        <button
+          type="button"
+          onClick={() => setIsExpanded(true)}
+          aria-expanded={false}
+          aria-label="Show full message"
+          title="Show full message"
+          className="absolute inset-0 cursor-pointer"
+        />
+      )}
+      {isClamped && isExpanded && (
+        <button
+          type="button"
+          onClick={() => setIsExpanded(false)}
+          aria-expanded={true}
+          aria-label="Collapse message"
+          title="Collapse"
+          className="absolute bottom-1 right-1 flex size-5 items-center justify-center rounded-md bg-secondary/90 text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Icon name="chevronDown" className="size-3 rotate-180" />
+        </button>
+      )}
+    </div>
+  );
 }
 
 interface AiChatPanelProps {
@@ -733,9 +810,9 @@ const MessageBubble = memo(function MessageBubble({
           </div>
         )}
         {message.text && (
-          <div className="rounded-xl rounded-br-sm bg-secondary border border-border text-current px-3 py-2 text-xs whitespace-pre-wrap break-words">
+          <CollapsibleUserMessage>
             <MessageTextWithMentions text={message.text} mentions={message.mentions} />
-          </div>
+          </CollapsibleUserMessage>
         )}
       </div>
     );
