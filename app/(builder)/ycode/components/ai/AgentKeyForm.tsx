@@ -84,7 +84,7 @@ export default function AgentKeyForm({ provider, submitLabel, keyScope, onDone, 
         >
           {provider.consoleLabel}
         </a>
-        . It&apos;s verified, then stored on your server — never sent to the browser.
+        .
       </FieldDescription>
       <div className="flex gap-2">
         <Input

@@ -21,9 +21,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { FieldDescription, FieldLabel } from '@/components/ui/field';
 import { Icon } from '@/components/ui/icon';
 import type { IconProps } from '@/components/ui/icon';
 import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
 import { AGENT_PROVIDERS, providerOfModel } from '@/lib/agent/models';
 import { getLayerName } from '@/lib/layer-display-utils';
 import { findLayerById } from '@/lib/layer-utils';
@@ -699,8 +701,15 @@ const PROVIDER_ICONS: Record<AgentProviderId, IconProps['name']> = {
 function ConnectAgentState() {
   const router = useRouter();
   const [setupProvider, setSetupProvider] = useState<AgentProviderId | null>(null);
+  // Scope for the key being connected (matches the toggle in Settings → Agent).
+  const [connectForAll, setConnectForAll] = useState(true);
 
   const activeProvider = AGENT_PROVIDERS.find((provider) => provider.id === setupProvider) ?? null;
+
+  const handleOpenSetup = (providerId: AgentProviderId) => {
+    setConnectForAll(true);
+    setSetupProvider(providerId);
+  };
 
   return (
     <>
@@ -721,7 +730,7 @@ function ConnectAgentState() {
               size="sm"
               variant="secondary"
               className="w-full"
-              onClick={() => setSetupProvider(provider.id)}
+              onClick={() => handleOpenSetup(provider.id)}
             >
               <Icon name={PROVIDER_ICONS[provider.id]} className="size-3.5" />
               {PROVIDER_SHORT_LABELS[provider.id]}
@@ -746,10 +755,30 @@ function ConnectAgentState() {
                 Connect {PROVIDER_SHORT_LABELS[activeProvider.id]}
               </DialogTitle>
             </DialogHeader>
-            <div className="border-t -mt-3 pt-4">
+            <div className="border-t -mt-3 pt-4 flex flex-col gap-5">
+              <div className="flex items-start gap-4">
+                <div className="flex-1 min-w-0">
+                  <FieldLabel
+                    htmlFor={`${activeProvider.id}-panel-connect-scope`}
+                    className="mb-1"
+                  >
+                    Available to all users on this project
+                  </FieldLabel>
+                  <FieldDescription className="mb-0">
+                    When off, the key works only for you — other users can connect
+                    their own {activeProvider.label} key.
+                  </FieldDescription>
+                </div>
+                <Switch
+                  id={`${activeProvider.id}-panel-connect-scope`}
+                  checked={connectForAll}
+                  onCheckedChange={setConnectForAll}
+                />
+              </div>
               <AgentKeyForm
                 provider={activeProvider}
                 submitLabel="Connect"
+                keyScope={connectForAll ? 'all' : 'personal'}
                 onDone={() => setSetupProvider(null)}
                 onCancel={() => setSetupProvider(null)}
               />
