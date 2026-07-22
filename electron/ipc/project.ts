@@ -68,10 +68,7 @@ export function registerProjectHandlers(ipcMain: IpcMain, getWindow: WindowGette
     const win = getWindow();
     const folder = await pickFolder(win, { title: 'Create new Ycode project' });
     if (!folder) return { canceled: true };
-    await fs.mkdir(path.join(folder, 'data', 'layers'), { recursive: true });
-    await fs.mkdir(path.join(folder, 'assets', 'images'), { recursive: true });
-    await fs.mkdir(path.join(folder, 'assets', 'fonts'), { recursive: true });
-    await fs.mkdir(path.join(folder, 'out'), { recursive: true });
+    await copyTemplate('blank', folder);
     const project = {
       id: crypto.randomUUID(),
       name: path.basename(folder),
@@ -81,11 +78,6 @@ export function registerProjectHandlers(ipcMain: IpcMain, getWindow: WindowGette
     await fs.writeFile(
       path.join(folder, '.ycode', 'project.json'),
       JSON.stringify(project, null, 2),
-      'utf8',
-    );
-    await fs.writeFile(
-      path.join(folder, '.ycode', 'config.json'),
-      JSON.stringify({ editor: {}, includeOutInGit: false }, null, 2),
       'utf8',
     );
     recent.add(folder);
@@ -163,4 +155,43 @@ export function registerProjectHandlers(ipcMain: IpcMain, getWindow: WindowGette
       return { ok: false, error: msg } as const;
     }
   });
+}
+
+/**
+ * Copy a starter template into a fresh project folder. Looks in:
+ *   1. <app>/templates/<name>/           (production build)
+ *   2. <repo>/templates/<name>/          (dev — running from source)
+ *   3. <resourcesPath>/templates/<name>/ (extraResources)
+ */
+async function copyTemplate(name: string, target: string): Promise<void> {
+  const candidates = [
+    path.join(__dirname, '..', '..', 'templates', name),
+    path.join(__dirname, '..', '..', '..', 'templates', name),
+    path.join(process.resourcesPath ?? '', 'templates', name),
+  ];
+  let src: string | null = null;
+  for (const c of candidates) {
+    if (fsSync.existsSync(c)) {
+      src = c;
+      break;
+    }
+  }
+  if (!src) throw new Error(`Template not found: ${name}`);
+
+  await fs.mkdir(target, { recursive: true });
+  await copyDir(src, target);
+}
+
+async function copyDir(src: string, dst: string): Promise<void> {
+  const entries = await fs.readdir(src, { withFileTypes: true });
+  await fs.mkdir(dst, { recursive: true });
+  for (const entry of entries) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dst, entry.name);
+    if (entry.isDirectory()) {
+      await copyDir(s, d);
+    } else if (entry.isFile()) {
+      await fs.copyFile(s, d);
+    }
+  }
 }
