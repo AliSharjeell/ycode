@@ -1,0 +1,7 @@
+.ycode/config.json
+node_modules/
+out/
+!out/.gitkeep
+.DS_Store
+Thumbs.db
+*.log

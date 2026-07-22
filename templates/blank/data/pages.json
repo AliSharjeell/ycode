@@ -1,0 +1,32 @@
+[
+  {
+    "id": "home",
+    "slug": "",
+    "name": "Home",
+    "page_folder_id": null,
+    "order": 0,
+    "depth": 0,
+    "is_index": true,
+    "is_dynamic": false,
+    "error_page": null,
+    "settings": {
+      "cms": null,
+      "auth": null,
+      "seo": {
+        "title": "Home",
+        "description": "",
+        "image": null,
+        "noindex": false
+      },
+      "custom_code": null
+    },
+    "content_hash": null,
+    "is_published": false,
+    "is_publishable": true,
+    "has_published_version": false,
+    "is_modified": false,
+    "created_at": "2026-01-01T00:00:00.000Z",
+    "updated_at": "2026-01-01T00:00:00.000Z",
+    "deleted_at": null
+  }
+]
