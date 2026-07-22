@@ -1,12 +1,20 @@
 /**
  * isomorphic-git HTTP plugin (Node version).
  *
- * isomorphic-git expects an `@isomorphic-git/lightning-fs` http plugin, but
- * we are in Node, so we use the built-in `https` module instead.
+ * isomorphic-git wants an HTTP plugin that returns a body compatible with
+ * its `GitHttpRequest` shape. We use Node's built-in `https`/`http` and
+ * adapt the response to async-iterable chunks, which is what isomorphic-git
+ * consumes to stream large pack responses.
  */
 import * as https from 'node:https';
 import * as http from 'node:http';
 import { URL } from 'node:url';
+
+interface HttpResponse {
+  statusCode: number;
+  body: AsyncIterableIterator<Uint8Array>;
+  headers: Record<string, string>;
+}
 
 const httpPlugin = {
   async request({
@@ -18,8 +26,8 @@ const httpPlugin = {
     url: string;
     method?: string;
     headers?: Record<string, string>;
-    body?: Uint8Array;
-  }): Promise<{ statusCode: number; body: Uint8Array; headers: Record<string, string> }> {
+    body?: any;
+  }): Promise<any> {
     const parsed = new URL(url);
     const lib = parsed.protocol === 'https:' ? https : http;
     return new Promise((resolve, reject) => {
@@ -32,25 +40,38 @@ const httpPlugin = {
           headers,
         },
         (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (chunk: Buffer) => chunks.push(chunk));
-          res.on('end', () => {
-            resolve({
-              statusCode: res.statusCode ?? 0,
-              body: new Uint8Array(Buffer.concat(chunks)),
-              headers: res.headers as Record<string, string>,
-            });
+          resolve({
+            url,
+            statusCode: res.statusCode ?? 0,
+            statusMessage: res.statusMessage ?? '',
+            body: (async function* () {
+              for await (const chunk of res) {
+                yield chunk as Uint8Array;
+              }
+            })(),
+            headers: res.headers as Record<string, string>,
           });
-          res.on('error', reject);
         },
       );
       req.on('error', reject);
       if (body) {
-        req.write(Buffer.from(body));
+        if (typeof body[Symbol.asyncIterator] === 'function') {
+          (async () => {
+            for await (const chunk of body) {
+              req.write(chunk);
+            }
+            req.end();
+          })();
+        } else {
+          req.write(Buffer.from(body));
+          req.end();
+        }
+      } else {
+        req.end();
       }
-      req.end();
     });
   },
 };
 
 export default httpPlugin;
+export type { HttpResponse };
