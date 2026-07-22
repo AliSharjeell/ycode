@@ -189,5 +189,10 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "sharp@0.34.5": true,
+    "unrs-resolver@1.11.1": true
   }
 }
