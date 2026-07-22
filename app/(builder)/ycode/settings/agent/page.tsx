@@ -6,19 +6,10 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import {
   Field,
   FieldDescription,
   FieldLabel,
-  FieldLegend,
 } from '@/components/ui/field';
-import { Icon } from '@/components/ui/icon';
 import {
   Select,
   SelectContent,
@@ -26,16 +17,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Sheet,
+  SheetActions,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
 import AgentKeyForm from '@/app/(builder)/ycode/components/ai/AgentKeyForm';
+import ProviderLogo from '@/app/(builder)/ycode/components/ai/ProviderLogo';
 import { agentSettingsApi } from '@/lib/api';
 import { AGENT_MODELS, AGENT_PROVIDERS } from '@/lib/agent/models';
 import { cn } from '@/lib/utils';
 import { useAgentSettingsStore } from '@/stores/useAgentSettingsStore';
 
 import type { AgentProviderOption } from '@/lib/agent/models';
-import type { AgentProviderId } from '@/types';
+import type { AgentKeyScope, AgentProviderId } from '@/types';
 
 interface KeyFeedback {
   success: boolean;
@@ -48,9 +48,10 @@ export default function AgentSettingsPage() {
   const loadStatus = useAgentSettingsStore((s) => s.loadStatus);
   const saveSettings = useAgentSettingsStore((s) => s.saveSettings);
 
-  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [selectedProviderId, setSelectedProviderId] = useState<AgentProviderId | null>(null);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [isSavingModels, setIsSavingModels] = useState(false);
+  const [defaultModelError, setDefaultModelError] = useState<string | null>(null);
   const [isSavingDefault, setIsSavingDefault] = useState(false);
   const [providerToRemove, setProviderToRemove] = useState<AgentProviderOption | null>(null);
   const [isRemoving, setIsRemoving] = useState(false);
@@ -63,9 +64,6 @@ export default function AgentSettingsPage() {
   const connectedProviders = AGENT_PROVIDERS.filter(
     (provider) => status?.providers[provider.id]?.configured,
   );
-  const availableProviders = AGENT_PROVIDERS.filter(
-    (provider) => !status?.providers[provider.id]?.configured,
-  );
 
   const enabledModels = status?.enabledModels ?? [];
   // Models the agent can actually run: enabled AND from a connected provider.
@@ -74,6 +72,10 @@ export default function AgentSettingsPage() {
       enabledModels.includes(option.id) &&
       status?.providers[option.provider]?.configured,
   );
+
+  const selectedProvider = AGENT_PROVIDERS.find(
+    (provider) => provider.id === selectedProviderId,
+  ) ?? null;
 
   const handleToggleAgent = async (checked: boolean) => {
     try {
@@ -112,12 +114,12 @@ export default function AgentSettingsPage() {
   };
 
   const handleDefaultModelChange = async (value: string) => {
-    setModelsError(null);
+    setDefaultModelError(null);
     try {
       setIsSavingDefault(true);
       const success = await saveSettings({ model: value });
       if (!success) {
-        setModelsError(useAgentSettingsStore.getState().error ?? 'Failed to save default model');
+        setDefaultModelError(useAgentSettingsStore.getState().error ?? 'Failed to save default model');
       }
     } finally {
       setIsSavingDefault(false);
@@ -150,7 +152,6 @@ export default function AgentSettingsPage() {
     );
   }
 
-  const showAddForm = isAddOpen || connectedProviders.length === 0;
   const agentEnabled = status?.agentEnabled ?? true;
 
   return (
@@ -191,41 +192,20 @@ export default function AgentSettingsPage() {
             </header>
 
             <p className="text-sm text-muted-foreground pb-5">
-              Connect your own AI to power the agent. Add one provider at a time — usage is
-              billed directly to your account with that provider.
+              Connect your own AI to power the agent. Usage is billed directly to your
+              account with each provider.
             </p>
 
-            <div className="flex flex-col gap-4">
-              {connectedProviders.map((provider) => (
+            <div className="flex flex-col gap-2">
+              {AGENT_PROVIDERS.map((provider) => (
                 <ProviderCard
                   key={provider.id}
                   provider={provider}
-                  status={status}
-                  enabledModels={enabledModels}
-                  isSavingModels={isSavingModels}
-                  onToggleModel={handleToggleModel}
-                  onRemove={() => setProviderToRemove(provider)}
+                  isConnected={status?.providers[provider.id]?.configured ?? false}
+                  scope={status?.providers[provider.id]?.scope ?? null}
+                  onOpenSettings={() => setSelectedProviderId(provider.id)}
                 />
               ))}
-
-              {showAddForm && availableProviders.length > 0 ? (
-                <AddProviderCard
-                  providers={availableProviders}
-                  isFirst={connectedProviders.length === 0}
-                  onDone={() => setIsAddOpen(false)}
-                  onCancel={connectedProviders.length > 0 ? () => setIsAddOpen(false) : undefined}
-                />
-              ) : availableProviders.length > 0 ? (
-                <div>
-                  <Button
-                    variant="secondary"
-                    onClick={() => setIsAddOpen(true)}
-                  >
-                    <Icon name="plus" />
-                    Add new
-                  </Button>
-                </div>
-              ) : null}
             </div>
           </>
         )}
@@ -263,12 +243,34 @@ export default function AgentSettingsPage() {
                 </div>
               </Field>
 
-              {modelsError && (
-                <p className="text-xs text-destructive">{modelsError}</p>
+              {defaultModelError && (
+                <p className="text-xs text-destructive">{defaultModelError}</p>
               )}
             </div>
           </>
         )}
+
+        <Sheet
+          open={selectedProvider !== null}
+          onOpenChange={(open) => {
+            if (!open) setSelectedProviderId(null);
+          }}
+        >
+          <SheetContent className="sm:max-w-lg overflow-y-auto">
+            {selectedProvider && (
+              <ProviderSheetContent
+                key={selectedProvider.id}
+                provider={selectedProvider}
+                status={status}
+                enabledModels={enabledModels}
+                isSavingModels={isSavingModels}
+                modelsError={modelsError}
+                onToggleModel={handleToggleModel}
+                onRemove={() => setProviderToRemove(selectedProvider)}
+              />
+            )}
+          </SheetContent>
+        </Sheet>
 
         <ConfirmDialog
           open={providerToRemove !== null}
@@ -288,32 +290,147 @@ export default function AgentSettingsPage() {
   );
 }
 
-// ── Connected provider card ──────────────────────────────────────────────────
+// ── Provider status badges ───────────────────────────────────────────────────
+
+interface ProviderStatusBadgeProps {
+  isConnected: boolean;
+  className?: string;
+}
+
+/** Same chip style as the role badges on the Users settings page. */
+function ProviderStatusBadge({ isConnected, className }: ProviderStatusBadgeProps) {
+  return (
+    <span
+      className={cn(
+        'text-[10px] px-1.5 py-0.5 rounded',
+        isConnected
+          ? 'text-green-600 dark:text-green-400 bg-green-400/15'
+          : 'text-muted-foreground bg-secondary',
+        className,
+      )}
+    >
+      {isConnected ? 'Connected' : 'Not connected'}
+    </span>
+  );
+}
+
+interface ProviderScopeBadgeProps {
+  scope: AgentKeyScope | null;
+  className?: string;
+}
+
+/** Who the connected key is available to: everyone on the project or only
+ * the current user. */
+function ProviderScopeBadge({ scope, className }: ProviderScopeBadgeProps) {
+  if (!scope) return null;
+
+  return (
+    <span
+      className={cn(
+        'text-[10px] px-1.5 py-0.5 rounded text-muted-foreground bg-secondary',
+        className,
+      )}
+    >
+      {scope === 'all' ? 'All users' : 'Only you'}
+    </span>
+  );
+}
+
+// ── Provider card (opens the settings sheet) ─────────────────────────────────
 
 interface ProviderCardProps {
+  provider: AgentProviderOption;
+  isConnected: boolean;
+  scope: AgentKeyScope | null;
+  onOpenSettings: () => void;
+}
+
+function ProviderCard({ provider, isConnected, scope, onOpenSettings }: ProviderCardProps) {
+  const models = AGENT_MODELS.filter((option) => option.provider === provider.id);
+
+  return (
+    <div
+      onClick={onOpenSettings}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpenSettings();
+        }
+      }}
+      className="flex items-center gap-3 w-full p-4 bg-secondary/20 rounded-lg transition-colors text-left hover:bg-secondary/40 cursor-pointer"
+    >
+      <div className="flex items-center justify-center size-10 rounded-lg bg-secondary shrink-0">
+        <ProviderLogo providerId={provider.id} className="size-5" />
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="font-medium text-sm mb-0.5">{provider.label}</div>
+        <p className="text-xs text-muted-foreground truncate">
+          {models.map((option) => option.label).join(', ')}
+        </p>
+      </div>
+
+      {isConnected && <ProviderScopeBadge scope={scope} className="shrink-0" />}
+      <ProviderStatusBadge isConnected={isConnected} className="shrink-0" />
+    </div>
+  );
+}
+
+// ── Provider settings sheet ──────────────────────────────────────────────────
+
+interface ProviderSheetContentProps {
   provider: AgentProviderOption;
   status: ReturnType<typeof useAgentSettingsStore.getState>['status'];
   enabledModels: string[];
   isSavingModels: boolean;
+  modelsError: string | null;
   onToggleModel: (modelId: string, checked: boolean) => void;
   onRemove: () => void;
 }
 
-function ProviderCard({
+function ProviderSheetContent({
   provider,
   status,
   enabledModels,
   isSavingModels,
+  modelsError,
   onToggleModel,
   onRemove,
-}: ProviderCardProps) {
+}: ProviderSheetContentProps) {
+  const saveSettings = useAgentSettingsStore((s) => s.saveSettings);
+
   const [isReplacing, setIsReplacing] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isSavingScope, setIsSavingScope] = useState(false);
   const [feedback, setFeedback] = useState<KeyFeedback | null>(null);
+  // Scope for a key being connected (the toggle above the connect form).
+  const [connectForAll, setConnectForAll] = useState(true);
 
   const keyStatus = status?.providers[provider.id];
+  const isConnected = keyStatus?.configured ?? false;
   const usesEnvKey = keyStatus?.source === 'env';
+  const scope = keyStatus?.scope ?? null;
   const models = AGENT_MODELS.filter((option) => option.provider === provider.id);
+
+  const handleScopeChange = async (forAllUsers: boolean) => {
+    try {
+      setIsSavingScope(true);
+      setFeedback(null);
+      const success = await saveSettings({
+        keyScopes: { [provider.id]: forAllUsers ? 'all' : 'personal' },
+      });
+      if (!success) {
+        setFeedback({
+          success: false,
+          message: useAgentSettingsStore.getState().error ?? 'Failed to change key availability',
+        });
+      }
+    } finally {
+      setIsSavingScope(false);
+    }
+  };
 
   const handleTest = async () => {
     try {
@@ -333,177 +450,180 @@ function ProviderCard({
   };
 
   return (
-    <div className="flex flex-col bg-secondary/20 p-8 rounded-lg">
-      <div className="flex items-start gap-4">
-        <div className="flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary">
-          <Icon name="sparkles" className="size-4 text-muted-foreground" />
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <FieldLabel className="mb-0">{provider.label}</FieldLabel>
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
-              <span className="size-1.5 rounded-full bg-green-500" />
-              Connected
-            </span>
-            {usesEnvKey && (
-              <span className="text-[10px] text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
-                {provider.envVar}
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground truncate">
-            {usesEnvKey
-              ? 'Key provided by an environment variable on your server.'
-              : `API key ${keyStatus?.maskedKey ?? ''}`}
-          </p>
-        </div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+    <>
+      <SheetHeader>
+        <SheetTitle className="mr-auto flex items-center gap-2">
+          {provider.label}
+          {isConnected && <ProviderScopeBadge scope={scope} />}
+          <ProviderStatusBadge isConnected={isConnected} />
+        </SheetTitle>
+        {isConnected && !usesEnvKey && (
+          <SheetActions>
             <Button
               variant="secondary"
               size="xs"
-              aria-label={`${provider.label} options`}
+              onClick={onRemove}
             >
-              {isTesting ? <Spinner className="size-3.5" /> : <Icon name="more" />}
+              Disconnect
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={handleTest}>
-              Test API key
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() => {
-                setFeedback(null);
-                setIsReplacing(true);
-              }}
-            >
-              {usesEnvKey ? 'Override key' : 'Replace key'}
-            </DropdownMenuItem>
-            {!usesEnvKey && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  className="text-destructive focus:text-destructive"
-                  onClick={onRemove}
-                >
-                  Disconnect
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+          </SheetActions>
+        )}
+        <SheetDescription className="sr-only">
+          {provider.label} provider settings
+        </SheetDescription>
+      </SheetHeader>
 
-      {feedback && (
-        <p
-          className={cn(
-            'text-xs mt-3',
-            feedback.success ? 'text-green-600 dark:text-green-400' : 'text-destructive',
-          )}
-        >
-          {feedback.message}
-        </p>
-      )}
-
-      {isReplacing && (
-        <div className="mt-4">
-          <AgentKeyForm
-            provider={provider}
-            submitLabel="Save key"
-            onDone={() => setIsReplacing(false)}
-            onCancel={() => setIsReplacing(false)}
-          />
-        </div>
-      )}
-
-      <div className="border-t mt-6 pt-5">
-        <div className="flex items-center gap-2 mb-1">
-          <FieldLabel className="mb-0">Models</FieldLabel>
-          {isSavingModels && <Spinner className="size-3.5" />}
-        </div>
-        <FieldDescription className="mb-3">
-          Choose which {provider.label} models can be selected in the agent panel
-        </FieldDescription>
-        <div className="flex flex-col gap-2">
-          {models.map((option) => (
-            <label
-              key={option.id}
-              className="flex items-center gap-2 text-xs cursor-pointer w-fit"
-            >
-              <Checkbox
-                checked={enabledModels.includes(option.id)}
-                disabled={isSavingModels}
-                onCheckedChange={(checked) => onToggleModel(option.id, checked === true)}
-              />
-              {option.label}
-              {status?.model === option.id && (
+      <div className="mt-3 flex flex-col gap-8">
+        {isConnected ? (
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <FieldLabel className="mb-0">API key</FieldLabel>
+              {usesEnvKey && (
                 <span className="text-[10px] text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
-                  Default
+                  {provider.envVar}
                 </span>
               )}
-            </label>
-          ))}
-        </div>
+            </div>
+            <FieldDescription className="mb-3">
+              {usesEnvKey
+                ? 'Key provided by an environment variable on your server.'
+                : `API key ${keyStatus?.maskedKey ?? ''}`}
+            </FieldDescription>
+
+            {isReplacing ? (
+              <AgentKeyForm
+                provider={provider}
+                submitLabel="Save key"
+                onDone={() => setIsReplacing(false)}
+                onCancel={() => setIsReplacing(false)}
+              />
+            ) : (
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleTest}
+                  disabled={isTesting}
+                >
+                  {isTesting ? <Spinner className="size-3.5" /> : 'Test API key'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    setFeedback(null);
+                    setIsReplacing(true);
+                  }}
+                >
+                  {usesEnvKey ? 'Override key' : 'Replace key'}
+                </Button>
+              </div>
+            )}
+
+            {feedback && (
+              <p
+                className={cn(
+                  'text-xs mt-3',
+                  feedback.success ? 'text-green-600 dark:text-green-400' : 'text-destructive',
+                )}
+              >
+                {feedback.message}
+              </p>
+            )}
+
+            {!usesEnvKey && (
+              <div className="flex items-start gap-4 border-t mt-6 pt-5">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <FieldLabel htmlFor={`${provider.id}-scope`} className="mb-0">
+                      Available to all users
+                    </FieldLabel>
+                    {isSavingScope && <Spinner className="size-3.5" />}
+                  </div>
+                  <FieldDescription className="mb-0">
+                    When off, this key works only for you — other users can connect
+                    their own {provider.label} key.
+                  </FieldDescription>
+                </div>
+                <Switch
+                  id={`${provider.id}-scope`}
+                  checked={scope !== 'personal'}
+                  disabled={isSavingScope}
+                  onCheckedChange={handleScopeChange}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div>
+            <FieldDescription className="mb-4">
+              Not connected yet. Paste an API key to unlock {provider.label} models in
+              the agent panel.
+            </FieldDescription>
+
+            <div className="flex items-start gap-4 mb-5">
+              <div className="flex-1 min-w-0">
+                <FieldLabel htmlFor={`${provider.id}-connect-scope`} className="mb-1">
+                  Available to all users
+                </FieldLabel>
+                <FieldDescription className="mb-0">
+                  When off, the key works only for you — other users can connect
+                  their own {provider.label} key.
+                </FieldDescription>
+              </div>
+              <Switch
+                id={`${provider.id}-connect-scope`}
+                checked={connectForAll}
+                onCheckedChange={setConnectForAll}
+              />
+            </div>
+
+            {/* Connecting refreshes the store status, which re-renders this
+                sheet into the connected view — nothing to do on done. */}
+            <AgentKeyForm
+              provider={provider}
+              submitLabel="Connect"
+              keyScope={connectForAll ? 'all' : 'personal'}
+              onDone={() => setFeedback(null)}
+            />
+          </div>
+        )}
+
+        {isConnected && (
+          <div className="border-t pt-6">
+            <div className="flex items-center gap-2 mb-1">
+              <FieldLabel className="mb-0">Models</FieldLabel>
+              {isSavingModels && <Spinner className="size-3.5" />}
+            </div>
+            <FieldDescription className="mb-3">
+              Choose which {provider.label} models can be selected in the agent panel
+            </FieldDescription>
+            <div className="flex flex-col gap-2">
+              {models.map((option) => (
+                <label
+                  key={option.id}
+                  className="flex items-center gap-2 text-xs cursor-pointer w-fit"
+                >
+                  <Checkbox
+                    checked={enabledModels.includes(option.id)}
+                    disabled={isSavingModels}
+                    onCheckedChange={(checked) => onToggleModel(option.id, checked === true)}
+                  />
+                  {option.label}
+                  {status?.model === option.id && (
+                    <span className="text-[10px] text-muted-foreground bg-secondary px-1.5 py-0.5 rounded">
+                      Default
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+            {modelsError && (
+              <p className="text-xs text-destructive mt-3">{modelsError}</p>
+            )}
+          </div>
+        )}
       </div>
-    </div>
-  );
-}
-
-// ── Add provider card ────────────────────────────────────────────────────────
-
-interface AddProviderCardProps {
-  providers: AgentProviderOption[];
-  isFirst: boolean;
-  onDone: () => void;
-  onCancel?: () => void;
-}
-
-function AddProviderCard({ providers, isFirst, onDone, onCancel }: AddProviderCardProps) {
-  const [providerId, setProviderId] = useState<AgentProviderId>(providers[0].id);
-
-  // The previously selected provider may have just been connected (and dropped
-  // from the list); snap to the first still-available one.
-  const provider = providers.find((option) => option.id === providerId) ?? providers[0];
-
-  return (
-    <div className="flex flex-col gap-6 bg-secondary/20 p-8 rounded-lg">
-      <header>
-        <FieldLegend>{isFirst ? 'Connect your AI' : 'Add AI provider'}</FieldLegend>
-        <FieldDescription>
-          {isFirst
-            ? 'No AI is connected yet. Pick a provider and paste an API key to enable the agent.'
-            : 'Connect another provider to unlock its models in the agent panel.'}
-        </FieldDescription>
-      </header>
-
-      <Field>
-        <FieldLabel htmlFor="add-provider">Provider</FieldLabel>
-        <Select
-          value={provider.id}
-          onValueChange={(value) => setProviderId(value as AgentProviderId)}
-        >
-          <SelectTrigger id="add-provider" className="w-full max-w-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {providers.map((option) => (
-              <SelectItem key={option.id} value={option.id}>
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </Field>
-
-      <AgentKeyForm
-        key={provider.id}
-        provider={provider}
-        submitLabel="Connect"
-        onDone={onDone}
-        onCancel={onCancel}
-      />
-    </div>
+    </>
   );
 }

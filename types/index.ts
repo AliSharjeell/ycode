@@ -1281,11 +1281,17 @@ export interface Setting {
 // Agent (AI builder) Settings
 export type AgentProviderId = 'anthropic' | 'openai' | 'google';
 
+/** Who a configured provider key is available to. */
+export type AgentKeyScope = 'all' | 'personal';
+
 export interface AgentProviderKeyStatus {
   /** Whether this provider has an API key (from settings or environment). */
   configured: boolean;
   /** Where the active key comes from. */
   source: 'setting' | 'env' | null;
+  /** Availability of the active key: 'personal' = only the current user,
+   * 'all' = everyone on the project (shared key or env var). */
+  scope: AgentKeyScope | null;
   /** Masked hint of the configured key (e.g. "sk-ant-...wxyz"), never the full key. */
   maskedKey: string | null;
 }
@@ -1306,6 +1312,9 @@ export interface AgentSettingsStatus {
 export interface UpdateAgentSettingsData {
   /** Per-provider keys; null removes the stored key; undefined keeps the current one. */
   keys?: Partial<Record<AgentProviderId, string | null>>;
+  /** Per-provider key availability. With a new key: where to store it. Without
+   * a key: moves the existing stored key to the given scope. */
+  keyScopes?: Partial<Record<AgentProviderId, AgentKeyScope>>;
   model?: string;
   enabledModels?: string[];
   agentEnabled?: boolean;

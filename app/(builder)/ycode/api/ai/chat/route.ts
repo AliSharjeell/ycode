@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { getAgentProvider, AgentConfigurationError } from '@/lib/agent/providers';
 import { runAgent } from '@/lib/agent/runtime';
+import { getAuthUser } from '@/lib/supabase-auth';
 import type { AgentContentBlock, AgentMessage } from '@/lib/agent/providers/types';
 
 /**
@@ -89,7 +90,9 @@ export async function POST(request: Request): Promise<Response> {
   // model (and its provider) otherwise.
   let provider, model;
   try {
-    ({ provider, model } = await getAgentProvider(parsed.model));
+    // Resolve keys as the requesting user so personal (only-me) keys apply.
+    const auth = await getAuthUser();
+    ({ provider, model } = await getAgentProvider(parsed.model, auth?.user.id));
   } catch (error) {
     if (error instanceof AgentConfigurationError) {
       return NextResponse.json({ error: error.message }, { status: 400 });

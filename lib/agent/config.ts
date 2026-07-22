@@ -45,12 +45,39 @@ export const SETTING_AGENT_ENABLED = 'ai_agent_enabled';
 /** All settings keys that store a provider secret. */
 export const AI_SECRET_SETTING_KEYS: string[] = Object.values(PROVIDER_KEY_SETTINGS);
 
+/**
+ * Settings key holding a user's personal (only-me) key for a provider.
+ * Shared project keys live at the plain PROVIDER_KEY_SETTINGS key; personal
+ * keys are suffixed with the owner's user id and shadow the shared key for
+ * that user only.
+ */
+export function personalKeySetting(provider: AgentProviderId, userId: string): string {
+  return `${PROVIDER_KEY_SETTINGS[provider]}:${userId}`;
+}
+
+/**
+ * True for any settings key holding a provider secret — shared
+ * ("ai_anthropic_api_key") or per-user ("ai_anthropic_api_key:<userId>").
+ * Use this instead of exact-match checks wherever secrets must be filtered.
+ */
+export function isAgentSecretSettingKey(key: string): boolean {
+  return AI_SECRET_SETTING_KEYS.some(
+    (secret) => key === secret || key.startsWith(`${secret}:`),
+  );
+}
+
 export type KeySource = 'setting' | 'env';
+
+/** Who a configured key is available to. */
+export type AgentKeyScope = 'all' | 'personal';
 
 export interface ResolvedProviderKey {
   apiKey: string | null;
   /** Where the active key comes from, for the settings UI status display. */
   source: KeySource | null;
+  /** Availability of the active key: 'personal' = only the current user,
+   * 'all' = everyone on the project (stored shared key or env var). */
+  scope: AgentKeyScope | null;
 }
 
 export interface ResolvedAgentConfig {
@@ -79,14 +106,19 @@ const PROVIDER_ENV_KEYS: Record<AgentProviderId, string[]> = {
 /**
  * Resolve the BYOK configuration for all providers.
  *
- * Key precedence per provider: settings override, then env var.
+ * Key precedence per provider: the user's personal key (when `userId` is
+ * given), then the shared settings key, then the env var.
  * Model precedence: settings override, then ANTHROPIC_MODEL env var, then the
  * first enabled model of a configured provider.
  * Enabled models come from settings; an empty/invalid value means "all models".
  */
-export async function resolveAgentConfig(): Promise<ResolvedAgentConfig> {
+export async function resolveAgentConfig(userId?: string | null): Promise<ResolvedAgentConfig> {
+  const personalKeys = userId
+    ? AGENT_PROVIDERS.map((provider) => personalKeySetting(provider.id, userId))
+    : [];
   const settings = await getSettingsByKeys([
     ...AI_SECRET_SETTING_KEYS,
+    ...personalKeys,
     SETTING_MODEL,
     SETTING_ENABLED_MODELS,
     SETTING_AGENT_ENABLED,
@@ -94,13 +126,17 @@ export async function resolveAgentConfig(): Promise<ResolvedAgentConfig> {
 
   const providers = {} as Record<AgentProviderId, ResolvedProviderKey>;
   for (const provider of AGENT_PROVIDERS) {
-    const settingKey = asNonEmptyString(settings[PROVIDER_KEY_SETTINGS[provider.id]]);
+    const personalKey = userId
+      ? asNonEmptyString(settings[personalKeySetting(provider.id, userId)])
+      : null;
+    const sharedKey = asNonEmptyString(settings[PROVIDER_KEY_SETTINGS[provider.id]]);
     const envKey = PROVIDER_ENV_KEYS[provider.id]
       .map((name) => asNonEmptyString(process.env[name]))
       .find((value) => value !== null) ?? null;
     providers[provider.id] = {
-      apiKey: settingKey ?? envKey,
-      source: settingKey ? 'setting' : envKey ? 'env' : null,
+      apiKey: personalKey ?? sharedKey ?? envKey,
+      source: personalKey || sharedKey ? 'setting' : envKey ? 'env' : null,
+      scope: personalKey ? 'personal' : sharedKey || envKey ? 'all' : null,
     };
   }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AI_SECRET_SETTING_KEYS } from '@/lib/agent/config';
+import { isAgentSecretSettingKey } from '@/lib/agent/config';
 import { getSettingByKey, setSetting } from '@/lib/repositories/settingsRepository';
 import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services/cacheService';
 
@@ -20,17 +20,16 @@ import { clearAllCache, getAllPublishedRoutes, warmRoutes } from '@/lib/services
 const DRAFT_ONLY_SETTING_KEYS = new Set([
   'draft_css',
   'email',
-  ...AI_SECRET_SETTING_KEYS,
   'ai_model',
   'ai_enabled_models',
   'ai_agent_enabled',
 ]);
 
-/**
- * Secrets that must never be returned raw to the client. The agent settings
- * page reads a masked status from /ycode/api/settings/agent instead.
- */
-const SECRET_SETTING_KEYS = new Set(AI_SECRET_SETTING_KEYS);
+/** Builder-only keys that must not purge the public cache. Agent secrets
+ * (shared and per-user) are covered by isAgentSecretSettingKey. */
+function isDraftOnlySettingKey(key: string): boolean {
+  return DRAFT_ONLY_SETTING_KEYS.has(key) || isAgentSecretSettingKey(key);
+}
 
 /**
  * GET /ycode/api/settings/[key]
@@ -44,7 +43,7 @@ export async function GET(
   try {
     const { key } = await params;
 
-    if (SECRET_SETTING_KEYS.has(key)) {
+    if (isAgentSecretSettingKey(key)) {
       return NextResponse.json(
         { error: 'This setting cannot be read directly' },
         { status: 403 }
@@ -95,7 +94,7 @@ export async function PUT(
 
     // Skip cache invalidation for draft/internal settings so builder
     // autosaves don't purge the public CDN cache on every edit.
-    if (!DRAFT_ONLY_SETTING_KEYS.has(key)) {
+    if (!isDraftOnlySettingKey(key)) {
       await clearAllCache();
 
       // Prime the cache so the first visit to any public page after this

@@ -5,6 +5,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 
 import { resolveAgentConfig } from '@/lib/agent/config';
+import { getAuthUser } from '@/lib/supabase-auth';
 
 import type { AgentProviderId } from '@/lib/agent/models';
 
@@ -29,7 +30,9 @@ export async function POST(request: NextRequest) {
 
     let apiKey = body.apiKey?.trim();
     if (!apiKey) {
-      const config = await resolveAgentConfig();
+      // Resolve as the current user so their personal key is the one tested.
+      const auth = await getAuthUser();
+      const config = await resolveAgentConfig(auth?.user.id);
       apiKey = config.providers[provider].apiKey ?? undefined;
     }
 

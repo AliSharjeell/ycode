@@ -50,13 +50,19 @@ const PROVIDER_LABELS: Record<AgentProviderId, string> = {
  * provider has a key; otherwise the server-resolved default applies. Throws
  * AgentConfigurationError when no usable backend is configured, so the API
  * route can surface a clear message.
+ *
+ * `userId` scopes key resolution to the requesting user, so personal
+ * (only-me) provider keys are honored alongside shared project keys.
  */
-export async function getAgentProvider(requestedModel?: string | null): Promise<{
+export async function getAgentProvider(
+  requestedModel?: string | null,
+  userId?: string | null,
+): Promise<{
   provider: AgentProvider;
   model: string;
   enabledModels: string[];
 }> {
-  const config = await resolveAgentConfig();
+  const config = await resolveAgentConfig(userId);
 
   if (!config.agentEnabled) {
     throw new AgentConfigurationError(

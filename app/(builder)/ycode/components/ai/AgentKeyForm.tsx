@@ -10,10 +10,14 @@ import { agentSettingsApi } from '@/lib/api';
 import { useAgentSettingsStore } from '@/stores/useAgentSettingsStore';
 
 import type { AgentProviderOption } from '@/lib/agent/models';
+import type { AgentKeyScope } from '@/types';
 
 interface AgentKeyFormProps {
   provider: AgentProviderOption;
   submitLabel: string;
+  /** Where to store the key: 'all' (project-wide) or 'personal' (only the
+   * current user). Omit to keep the scope of the key being replaced. */
+  keyScope?: AgentKeyScope;
   onDone: () => void;
   onCancel?: () => void;
 }
@@ -24,7 +28,7 @@ interface AgentKeyFormProps {
  * fails (e.g. a network restriction on the server), a "save anyway" escape hatch
  * appears. Shared by Settings → Agent and the in-panel connect dialog.
  */
-export default function AgentKeyForm({ provider, submitLabel, onDone, onCancel }: AgentKeyFormProps) {
+export default function AgentKeyForm({ provider, submitLabel, keyScope, onDone, onCancel }: AgentKeyFormProps) {
   const saveSettings = useAgentSettingsStore((s) => s.saveSettings);
 
   const [keyInput, setKeyInput] = useState('');
@@ -51,7 +55,10 @@ export default function AgentKeyForm({ provider, submitLabel, onDone, onCancel }
         }
       }
 
-      const success = await saveSettings({ keys: { [provider.id]: trimmed } });
+      const success = await saveSettings({
+        keys: { [provider.id]: trimmed },
+        ...(keyScope ? { keyScopes: { [provider.id]: keyScope } } : {}),
+      });
       if (!success) {
         setError(useAgentSettingsStore.getState().error ?? 'Failed to save API key');
         return;
