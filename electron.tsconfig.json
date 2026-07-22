@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "outDir": "dist/electron",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"]
+    },
+    "resolveJsonModule": true,
+    "isolatedModules": false,
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": true,
+    "types": ["node", "electron"]
+  },
+  "include": [
+    "electron/**/*.ts",
+    "lib/projects/**/*.ts",
+    "lib/git/**/*.ts",
+    "lib/github/**/*.ts",
+    "lib/static-export/**/*.ts",
+    "types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "out",
+    "release",
+    ".next",
+    "app",
+    "components",
+    "hooks",
+    "stores",
+    "scripts"
+  ]
+}
