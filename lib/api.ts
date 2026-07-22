@@ -187,3 +187,133 @@ export const builderApi = {
 export function isDesktop(): boolean {
   return isElectron();
 }
+
+// Legacy stubs for removed APIs that the editor code still references.
+export const publishApi = {
+  publish: async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+    return { ok: false, error: 'Publishing is now done via the Build Site button.' };
+  },
+  unpublish: async (): Promise<{ ok: true } | { ok: false; error: string }> => {
+    return { ok: true };
+  },
+  preview: async (): Promise<{ ok: true; url: string } | { ok: false; error: string }> => {
+    return builderApi.preview();
+  },
+};
+
+export const editorApi = {
+  init: async (): Promise<{ ok: true }> => ({ ok: true }),
+};
+
+export const redirectsApi = {
+  list: async (): Promise<any[]> => (await ipc<unknown>('project:readData', 'redirects')) as any[],
+  save: (redirects: any[]) => ipc<{ ok: true } | { ok: false; error: string }>('project:writeData', 'redirects', redirects),
+};
+
+export const assetsApi = {
+  list: async (): Promise<any[]> => (await ipc<unknown>('project:readData', 'assets')) as any[],
+  save: (assets: any[]) => ipc<{ ok: true } | { ok: false; error: string }>('project:writeData', 'assets', assets),
+};
+
+export const assetFoldersApi = {
+  list: async (): Promise<any[]> => (await ipc<unknown>('project:readData', 'asset-folders')) as any[],
+  save: (folders: any[]) => ipc<{ ok: true } | { ok: false; error: string }>('project:writeData', 'asset-folders', folders),
+};
+
+export const uploadFileApi = {
+  upload: async (): Promise<{ ok: true; url: string } | { ok: false; error: string }> => {
+    return { ok: false, error: 'Use projectApi.addAsset instead.' };
+  },
+};
+
+export const aiChatsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+  delete: async () => ({ ok: true }),
+};
+
+export const updateNotificationApi = {
+  check: async () => ({ available: false }),
+};
+
+export const supabaseConfigApi = {
+  get: async () => null,
+};
+
+export const versionsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const credentialsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const apiKeysApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const webhooksApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const mcpTokensApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const staticExportApi = {
+  start: async () => ({ ok: false, error: 'Use Build Site instead.' }),
+  status: async () => ({ running: false, progress: 0 }),
+};
+
+export const collectionItemsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const collectionFieldsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const collectionsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const formsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const airtableApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const mailerliteApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const webflowApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
+
+export const mapsApi = {
+  geocode: async () => null,
+};
+
+export const mapsServerApi = {
+  geocode: async () => null,
+};
+
+export const layoutsApi = {
+  list: async () => [],
+  save: async () => ({ ok: true }),
+};
