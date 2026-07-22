@@ -102,7 +102,9 @@ app.whenReady().then(async () => {
   registerBuilderHandlers(ipcMain, () => mainWindow);
 
   await createWindow();
-  buildAppMenu(mainWindow);
+  if (mainWindow) {
+    buildAppMenu(mainWindow);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

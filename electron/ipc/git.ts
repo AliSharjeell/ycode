@@ -5,12 +5,12 @@
  * pull) can be slow and are streamed as progress where it matters.
  */
 import { BrowserWindow, IpcMain } from 'electron';
-import { git } from '../../lib/git/operations';
+import { gitRepo } from '../../lib/git/operations';
 
 type WindowGetter = () => BrowserWindow | null;
 
 function repoOrError() {
-  const repo = git.active();
+  const repo = gitRepo.active();
   if (!repo) throw new Error('No project open');
   return repo;
 }
