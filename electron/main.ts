@@ -72,11 +72,14 @@ async function createWindow(): Promise<void> {
 
   if (isDev) {
     const devUrl = process.env.YCODE_DEV_URL ?? 'http://localhost:3002';
-    await mainWindow.loadURL(devUrl);
+    // Land on the editor. The renderer checks isDesktop() and shows the
+    // project picker when no project is open.
+    await mainWindow.loadURL(`${devUrl}/ycode`);
     mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    // Static export ships to out/ (renderer build output).
-    const indexPath = path.join(__dirname, '..', 'out', 'index.html');
+    // Static export ships to out/ (renderer build output). Load the
+    // editor entry directly.
+    const indexPath = path.join(__dirname, '..', 'out', 'ycode', 'index.html');
     await mainWindow.loadFile(indexPath);
   }
 }
