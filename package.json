@@ -24,12 +24,13 @@
   "scripts": {
     "dev": "concurrently -k -n next,electron -c blue,green \"npm:dev:next\" \"npm:dev:electron\"",
     "dev:next": "next dev -p 3002",
-    "dev:electron": "wait-on http://localhost:3002 && tsc -p electron.tsconfig.json && cross-env NODE_ENV=development electron dist/electron/main.js",
+    "dev:electron": "wait-on http://localhost:3002 && tsc -p electron.tsconfig.json && cross-env NODE_ENV=development electron dist/electron/electron/main.js",
     "dev:webpack": "next dev -p 3002 --webpack",
     "build": "npm run build:next && npm run build:electron",
     "build:next": "next build",
     "build:electron": "tsc -p electron.tsconfig.json && electron-builder",
     "build:electron:dir": "tsc -p electron.tsconfig.json && electron-builder --dir",
+    "package": "npm run build && electron-builder",
     "start": "next start -p 3002",
     "cache:clear": "rm -rf .next out dist",
     "lint": "eslint .",
@@ -157,7 +158,7 @@
       "buildResources": "build"
     },
     "files": [
-      "dist/electron/**/*",
+      "dist/electron/electron/**/*",
       "out/**/*",
       "package.json",
       "!**/node_modules/**/*",

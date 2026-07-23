@@ -81,20 +81,20 @@ async function createWindow(): Promise<void> {
   }
 }
 
-app.whenReady().then(async () => {
-  // Register custom protocols BEFORE creating the window.
-  // (Schemes must be registered as privileged.)
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: 'ycode-asset',
-      privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true },
-    },
-    {
-      scheme: 'ycode-project',
-      privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true },
-    },
-  ]);
+// Register custom protocols BEFORE app is ready.
+// (Schemes must be registered as privileged before app.whenReady fires.)
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'ycode-asset',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true },
+  },
+  {
+    scheme: 'ycode-project',
+    privileges: { standard: true, secure: true, supportFetchAPI: true, bypassCSP: true },
+  },
+]);
 
+app.whenReady().then(async () => {
   await registerAssetProtocol();
   registerProjectHandlers(ipcMain, () => mainWindow);
   registerGitHandlers(ipcMain, () => mainWindow);
