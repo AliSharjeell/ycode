@@ -159,15 +159,18 @@ export function registerProjectHandlers(ipcMain: IpcMain, getWindow: WindowGette
 
 /**
  * Copy a starter template into a fresh project folder. Looks in:
- *   1. <app>/templates/<name>/           (production build)
- *   2. <repo>/templates/<name>/          (dev — running from source)
- *   3. <resourcesPath>/templates/<name>/ (extraResources)
+ *   1. <repo>/templates/<name>/                (dev — running from source)
+ *   2. <app>/templates/<name>/                 (production build with templates copied to dist)
+ *   3. <resourcesPath>/templates/<name>/        (extraResources — packaged build)
+ *   4. cwd/templates/<name>/                   (last-chance fallback)
  */
 async function copyTemplate(name: string, target: string): Promise<void> {
   const candidates = [
-    path.join(__dirname, '..', '..', 'templates', name),
+    path.join(__dirname, '..', '..', '..', '..', 'templates', name),
     path.join(__dirname, '..', '..', '..', 'templates', name),
+    path.join(__dirname, '..', '..', 'templates', name),
     path.join(process.resourcesPath ?? '', 'templates', name),
+    path.join(process.cwd(), 'templates', name),
   ];
   let src: string | null = null;
   for (const c of candidates) {
