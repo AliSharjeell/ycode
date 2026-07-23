@@ -1,43 +1,34 @@
 /**
  * Base route for the Ycode editor — URL: /ycode.
  *
- * Hosts the desktop shell. The original YCodeBuilderMain is not rendered
- * here because it depends on the legacy editor code that has not yet
- * been migrated to the new IPC API. As components are migrated, this
- * shell can be replaced with a thin wrapper around the migrated
- * YCodeBuilderMain.
+ * Shows the ProjectPicker when no project is open; otherwise the editor
+ * shell (rendered by the layout) takes over.
  */
 'use client';
 
 import { useEffect } from 'react';
 import { useProjectStore } from '@/stores/useProjectStore';
-import { YCodeDesktopShell } from './YCodeDesktopShell';
+import { ProjectPicker } from './components/ProjectPicker';
 import { isDesktop } from '@/lib/api';
 
 export default function YCodeEditorRoute() {
   const project = useProjectStore();
 
   useEffect(() => {
-    if (isDesktop()) {
-      void project.refresh();
+    if (!isDesktop()) {
+      // When running in a plain browser (e.g. during next dev outside
+      // Electron), we still try to load from the URL hash as a dev escape
+      // hatch. The renderer uses file:// URLs in dev to talk to a
+      // stand-alone project folder.
+      return;
     }
+    void project.refresh();
   }, []);
 
-  if (!isDesktop()) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-background text-foreground">
-        <div className="text-center p-8 max-w-md">
-          <h1 className="text-2xl font-semibold mb-2">Ycode desktop</h1>
-          <p className="text-sm text-muted-foreground">
-            This is the desktop editor. Run <code className="font-mono">npm run dev</code>{' '}
-            to launch the Electron host, or open the static export from
-            <code className="font-mono"> out/index.html </code>
-            in a browser.
-          </p>
-        </div>
-      </div>
-    );
+  if (isDesktop() && !project.path) {
+    return <ProjectPicker />;
   }
 
-  return <YCodeDesktopShell />;
+  // The actual editor shell is rendered by the layout (YCodeBuilderMain).
+  return null;
 }

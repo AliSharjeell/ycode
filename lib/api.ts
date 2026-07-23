@@ -5,9 +5,7 @@
  * can call familiar methods (`pagesApi.list()`, etc.) without caring that
  * the underlying transport is IPC instead of HTTP.
  */
-import type { Page, PageLayers, Component, LayerStyle, GlobalVariable, ColorVariable, Font } from '../types';
-
-type Settings = Record<string, unknown>;
+import type { Page, PageLayers, Component, LayerStyle, GlobalVariable, ColorVariable, Font, Settings } from '../types';
 
 declare global {
   interface Window {
@@ -107,24 +105,11 @@ export const foldersApi = {
 };
 
 // Legacy alias used by useGlobalsStore.
-export const globalVariablesApi = {
-  list: async (): Promise<GlobalVariable[]> => (await ipc<unknown>('project:readData', 'globals')) as GlobalVariable[],
-  save: (globals: GlobalVariable[]) =>
-    ipc<{ ok: true } | { ok: false; error: string }>('project:writeData', 'globals', globals),
-};
+export const globalVariablesApi = globalsApi;
 
 export const pageLayersApi = {
   get: async (pageId: string): Promise<PageLayers> => {
-    if (!isElectron()) {
-      return {
-        id: pageId,
-        page_id: pageId,
-        layers: [],
-        is_published: false,
-        created_at: '',
-        deleted_at: null,
-      } as PageLayers;
-    }
+    if (!isElectron()) return { id: pageId, page_id: pageId, layers: [], is_published: false };
     return (await ipc<unknown>('project:readData', `layers-${pageId}`)) as PageLayers;
   },
   save: (pageId: string, payload: PageLayers) =>

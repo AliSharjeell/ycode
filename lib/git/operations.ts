@@ -21,8 +21,8 @@ export interface GitStatus {
 export interface GitLogEntry {
   oid: string;
   message: string;
-  author: { name: string; email: string; timestamp: number };
-  committer: { name: string; email: string; timestamp: number };
+  author: { name: string; string; timestamp: number };
+  committer: { name: string; string; timestamp: number };
 }
 
 export interface GitBranch {
@@ -288,7 +288,7 @@ export class GitRepo {
   }
 }
 
-export const gitRepo = {
+export const git = {
   active(): GitRepo | null {
     const active = ProjectManager.active();
     if (!active) return GitRepo.active();

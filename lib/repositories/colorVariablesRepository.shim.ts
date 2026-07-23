@@ -7,6 +7,6 @@ export async function generateColorVariablesCss(): Promise<string> {
   if (!isDesktop()) return '';
   const vars = await colorVariablesApi.list();
   return vars
-    .map((v: any) => `  --${(v.name ?? v.key ?? '').toString().toLowerCase().replace(/\s+/g, '-')}: ${v.value};`)
+    .map((v: { key: string; value: string }) => `  --${v.key}: ${v.value};`)
     .join('\n');
 }
