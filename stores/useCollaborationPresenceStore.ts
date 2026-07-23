@@ -30,3 +30,7 @@ export const RESOURCE_TYPES = {
   LAYER: 'layer',
   COLLECTION_ITEM: 'collection_item',
 } as const;
+
+export function getResourceLockKey(type: string, id: string): string {
+  return `${type}:${id}`;
+}

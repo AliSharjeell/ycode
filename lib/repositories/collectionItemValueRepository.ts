@@ -1,4 +1,7 @@
 /**
- * Collection item value repository shim.
+ * @deprecated Stub for the deleted collectionItemValueRepository.
+ * The desktop app has no CMS.
  */
-export { getValuesByItemIds } from './collectionItemValuesRepository.shim';
+export async function getValuesByItemIds(_ids: string[]): Promise<any[]> {
+  return [];
+}

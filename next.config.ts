@@ -12,14 +12,13 @@ const nextConfig: NextConfig = {
     config.resolve = config.resolve || {};
     config.resolve.alias = {
       ...(config.resolve.alias || {}),
-      // @vercel/functions was uninstalled; alias to a local no-op shim.
-      '@vercel/functions': path.resolve(__dirname, 'lib/vercel-functions-shim.ts'),
+      '@vercel/functions': './lib/vercel-functions-shim.js',
     };
     return config;
   },
   turbopack: {
     resolveAlias: {
-      '@vercel/functions': path.resolve(__dirname, 'lib/vercel-functions-shim.ts'),
+      '@vercel/functions': './lib/vercel-functions-shim.js',
     },
   },
 };

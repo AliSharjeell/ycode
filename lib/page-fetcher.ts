@@ -1,7 +1,7 @@
 import { cache } from 'react';
 import { escapeHtml } from '@/lib/escape-html';
 import { getSupabaseAdmin } from '@/lib/supabase-server';
-import { getKnexClient } from '@/lib/knex-client';
+import { getKnex } from '@/lib/knex-client';
 import { buildSlugPath, buildDynamicPageUrl, buildLocalizedSlugPath, buildLocalizedDynamicPageUrl, detectLocaleFromPath, matchPageWithTranslatedSlugs, matchDynamicPageWithTranslatedSlugs } from '@/lib/page-utils';
 import { getItemWithValues, getItemsWithValues, getItemsWithValuesByIds, getItemIdsByFieldValue, getItemsByCollectionId, getSlugsByItemIds } from '@/lib/repositories/collectionItemRepository';
 import { getValuesByItemIds } from '@/lib/repositories/collectionItemValueRepository';
@@ -2151,7 +2151,7 @@ async function buildCollectionCache(
 
   // Warm direct DB connection in parallel so first-hit value queries don't pay
   // connection setup cost on the critical path.
-  const warmKnexPromise = getKnexClient()
+  const warmKnexPromise = getKnex()
     .then(knex => knex.raw('select 1'))
     .catch(() => null);
 
@@ -5496,3 +5496,10 @@ export function layerToHtml(
 
   return elementHtml;
 }
+
+
+// Stubs for additional CMS functions used by the original code.
+export const getAllColorVariables = async (): Promise<any[]> => [];
+export const getAllPageFolders = async (_draft?: boolean): Promise<any[]> => [];
+export const getAssetById = async (_id: string): Promise<any | null> => null;
+export const getAppSettingValue = async (_key: string): Promise<any> => null;

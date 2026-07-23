@@ -44,3 +44,7 @@ export async function getAssetsByFolderId(folderId: string): Promise<Asset[]> {
   const assets = (await window.api!.project.readData('assets')) as Asset[];
   return assets.filter((a) => a.folder_id === folderId);
 }
+
+export async function getAssetById(_id: string): Promise<any | null> {
+  return null;
+}

@@ -105,7 +105,7 @@ export const foldersApi = {
 };
 
 // Legacy alias used by useGlobalsStore.
-export const globalVariablesApi = globalsApi;
+// (Defined after globalsApi below to avoid TDZ.)
 
 export const pageLayersApi = {
   get: async (pageId: string): Promise<PageLayers> => {
@@ -133,6 +133,8 @@ export const globalsApi = {
   save: (globals: GlobalVariable[]) =>
     ipc<{ ok: true } | { ok: false; error: string }>('project:writeData', 'globals', globals),
 };
+
+export const globalVariablesApi = globalsApi;
 
 export const colorVariablesApi = {
   list: async (): Promise<ColorVariable[]> => (await ipc<unknown>('project:readData', 'color-variables')) as ColorVariable[],
